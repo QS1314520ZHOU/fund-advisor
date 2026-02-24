@@ -40,3 +40,13 @@ build/
 
 # Data snapshots (optional - uncomment if you want to ignore)
 # data/*.json
+
+# Large files
+*.zip
+*.tar.gz
+*.7z
+
+# Debug outputs
+*.txt
+!requirements.txt
+!README.md
