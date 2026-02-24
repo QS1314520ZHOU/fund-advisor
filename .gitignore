@@ -1,6 +1,9 @@
+# Environment variables
+.env
+.env.*
+
 # Logs
-*.log
-fund_advisor.log
+logs/
 
 # Python
 __pycache__/
@@ -8,7 +11,6 @@ __pycache__/
 *$py.class
 .Python
 *.so
-.env.local
 
 # Virtual Environment
 venv/
@@ -37,16 +39,23 @@ Thumbs.db
 dist/
 build/
 *.egg-info/
+run.spec
 
-# Data snapshots (optional - uncomment if you want to ignore)
-# data/*.json
+# Data snapshots
+data/*.json
+storage/
 
 # Large files
 *.zip
 *.tar.gz
 *.7z
 
-# Debug outputs
+# Debug and temporary outputs
 *.txt
+*.log
+*.json
+fund_advisor.log
 !requirements.txt
 !README.md
+!package.json
+!package-lock.json
