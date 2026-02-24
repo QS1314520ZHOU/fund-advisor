@@ -43,6 +43,11 @@ class AIService:
         
         self.api_key = self.settings.AI_API_KEY
         self.base_url = self.settings.AI_BASE_URL.rstrip('/')
+        # 自动纠正：如果用户提供的 URL 包含了 /chat/completions，我们需要去掉它，
+        # 因为后续代码会自动拼接这个后缀，或者在获取模型列表时需要拼接 /models
+        if self.base_url.endswith('/chat/completions'):
+            self.base_url = self.base_url.replace('/chat/completions', '').rstrip('/')
+            
         self.current_model = self.settings.AI_MODEL
         self.fallback_models = self.settings.AI_FALLBACK_MODELS
         self.timeout = self.settings.AI_TIMEOUT
@@ -91,7 +96,11 @@ class AIService:
                     logger.info(f"获取到 {len(models)} 个可用模型")
                     return self._available_models
                 else:
-                    logger.warning(f"获取模型列表失败: {response.status_code}")
+                    # 如果返回 404，说明该提供商可能不支持通用模型查询接口，这在很多中转 API 中很常见
+                    if response.status_code == 404:
+                        logger.debug(f"模型列表接口不可用 (404): {self.base_url}/models")
+                    else:
+                        logger.warning(f"获取模型列表失败: {response.status_code}")
                     
         except Exception as e:
             logger.error(f"获取模型列表异常: {e}")
