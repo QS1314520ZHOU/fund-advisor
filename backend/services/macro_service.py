@@ -34,8 +34,7 @@ class MacroService:
             # 3. 人民币汇率 (USD/CNY)
             usd_cny = await loop.run_in_executor(self.executor, self._get_usd_cny)
             
-            # 4. 恐慌指数 (VIX) - 简化处理
-            vix = 18.5 # 示例值，实际可从 ak.us_stock_vix_index() 获取
+            # 4. 恐慌指数 (VIX)
             
             return {
                 "success": True,
@@ -49,7 +48,7 @@ class MacroService:
                         "usd_cny": usd_cny
                     },
                     "risk": {
-                        "vix": vix
+                        "vix": await loop.run_in_executor(self.executor, self._get_vix)
                     },
                     "update_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
@@ -78,12 +77,32 @@ class MacroService:
             return 2.5
 
     def _get_us_bond_10y(self) -> Optional[float]:
-        """获取美国10年期国债收益率"""
+        """获取美国10年期国债收益率 (真实数据版)"""
         try:
-            # 简化逻辑，实务中可使用更多源
-            return 4.2 # 示例值
+            # 优先尝试英为财情数据
+            df = ak.bond_us_yield(start_date=datetime.date.today().strftime("%Y%m%d"))
+            if df.empty:
+                yesterday = (datetime.date.today() - datetime.timedelta(days=2)).strftime("%Y%m%d")
+                df = ak.bond_us_yield(start_date=yesterday)
+            
+            if not df.empty:
+                # 找到 10年期
+                row = df[df['指标名称'] == '10年期']
+                if not row.empty:
+                    return float(row.iloc[0]['收盘'])
+            return 4.2 
         except:
-            return 4.0
+            return 4.2
+
+    def _get_vix(self) -> Optional[float]:
+        """获取 VIX 恐慌指数 (真实数据版)"""
+        try:
+            df = ak.us_stock_vix_index()
+            if not df.empty:
+                return float(df.iloc[-1]['close'])
+            return 18.5
+        except:
+            return 18.5
 
     def _get_usd_cny(self) -> Optional[float]:
         """获取 USD/CNY 汇率"""

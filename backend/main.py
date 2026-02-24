@@ -11,6 +11,7 @@ import warnings
 # 忽略 pkg_resources 导致的弃用警告 (通常由 py_mini_racer 触发)
 warnings.filterwarnings("ignore", category=UserWarning, module="pkg_resources")
 from pathlib import Path
+from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,7 +42,12 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('fund_advisor.log', encoding='utf-8')
+        RotatingFileHandler(
+            'fund_advisor.log', 
+            maxBytes=10*1024*1024, # 10MB
+            backupCount=5,
+            encoding='utf-8'
+        )
     ]
 )
 logger = logging.getLogger(__name__)
@@ -213,13 +219,9 @@ except ImportError:
 
 from fastapi.staticfiles import StaticFiles
 
-app.include_router(query.router)
-app.include_router(admin.router)
+app.include_router(query.router, prefix="/api/v1")
+app.include_router(admin.router, prefix="/api/v1")
 
-# 静态数据存储挂载
-storage_path = BASE_DIR / "backend" / "data" / "storage"
-storage_path.mkdir(parents=True, exist_ok=True)
-app.mount("/static/storage", StaticFiles(directory=str(storage_path)), name="storage")
 
 
 @app.get("/app", response_class=HTMLResponse)

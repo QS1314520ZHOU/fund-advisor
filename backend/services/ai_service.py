@@ -6,17 +6,18 @@ AI 服务模块 - 支持模型管理与降级
 import logging
 import httpx
 import json
+import hashlib
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
 try:
     from ..config import get_settings
-    from .vector_service import get_vector_service
+    # from .vector_service import get_vector_service
     from ..utils.cache import get_cache_manager
 except (ImportError, ValueError):
     # Fallback for direct script execution or different import paths
     from config import get_settings
-    from services.vector_service import get_vector_service
+    # from services.vector_service import get_vector_service
     from utils.cache import get_cache_manager
 from ..database import get_db
 
@@ -107,47 +108,7 @@ class AIService:
         
         return self._available_models or []
 
-    async def generate_deep_analysis(self, query: str) -> Dict:
-        """研报级 RAG 深度分析"""
-        try:
-            # 0. 检查缓存
-            cache = get_cache_manager()
-            cache_key = f"rag_analysis:{query}"
-            cached = cache.get(cache_key)
-            if cached:
-                logger.info(f"RAG 分析命中缓存: {query}")
-                return cached
-
-            # 1. 检索相关背景知识
-            vector_service = get_vector_service()
-            contexts = vector_service.query_kb(query, limit=3)
-            
-            context_str = ""
-            if contexts:
-                context_str = "\n".join([f"【参考研报: {c['title']}】\n摘要: {c['summary']}" for c in contexts])
-            
-            # 2. 构建增强 Prompt
-            system_prompt = """你是一个资深的基金分析师和宏观经济专家。
-请结合提供的参考研报（Context）和你的专业知识，对用户提出的问题进行深度分析。
-分析应逻辑严密，包含具体的事实依据，并给出客观的结论。
-如果 Context 中不包含相关内容，请明确告知，并基于公开市场逻辑进行一般性分析。
-请使用 Markdown 格式输出。"""
-
-            user_prompt = f"问题: {query}\n\n参考背景 (Context):\n{context_str or '暂无相关深度研报，请基于公开数据分析'}"
-            
-            # 3. 调用 AI
-            content = await self.ask_ai(user_prompt, system_prompt=system_prompt)
-            result = {
-                'success': True,
-                'content': content,
-                'sources': [{'title': c['title'], 'date': c['date']} for c in contexts]
-            }
-            # 存入缓存 (存1小时)
-            cache.set(cache_key, result, expire=3600)
-            return result
-        except Exception as e:
-            logger.error(f"RAG 深度分析失败: {e}")
-            return {'success': False, 'error': str(e)}
+    # generate_deep_analysis 已删除
     
     def get_recommended_models(self) -> List[str]:
         """获取推荐模型列表（按优先级排序）"""
@@ -244,40 +205,35 @@ class AIService:
                                 {"role": "user", "content": user_prompt}
                             ],
                             "max_tokens": max_tokens,
-                            "temperature": 0.7
+                            "temperature": 0.3
                         }
                     )
                     
                     if response.status_code == 200:
                         data = response.json()
                         content = data['choices'][0]['message']['content']
-                        logger.info(f"AI调用成功: model={model}")
+                        logger.info(f"AI 调用成功: model={model}")
+                        self.current_model = model # 更新为主选模型
                         return content
-                    elif response.status_code in [503, 429, 500]:
-                        # 模型暂时不可用，尝试下一个
-                        error_msg = f"{model}: {response.status_code}"
-                        try:
-                            err_data = response.json()
-                            if 'error' in err_data:
-                                error_msg = f"{model}: {err_data['error'].get('message', response.status_code)}"
-                        except:
-                            pass
-                        errors.append(error_msg)
-                        logger.warning(f"模型 {model} 不可用，尝试下一个...")
-                        continue
                     else:
-                        errors.append(f"{model}: HTTP {response.status_code}")
-                        logger.warning(f"AI调用失败 ({model}): {response.status_code}")
-                        
-            except httpx.TimeoutException:
-                errors.append(f"{model}: 超时")
-                logger.warning(f"AI调用超时 ({model})")
+                        error_msg = response.json().get('error', {}).get('message', '未知错误')
+                        errors.append(f"{model}: {error_msg}")
+                        logger.warning(f"AI 模型 {model} 调用失败: {response.status_code} - {error_msg}")
             except Exception as e:
-                errors.append(f"{model}: {str(e)[:50]}")
-                logger.warning(f"AI调用异常 ({model}): {e}")
+                errors.append(f"{model}: {str(e)}")
+                logger.error(f"AI 模型 {model} 异常: {e}")
         
-        logger.error(f"所有模型都调用失败: {errors}")
+        
+        logger.error(f"所有模型尝试均失败: {'; '.join(errors)}")
         return None
+
+    def _generate_metrics_hash(self, metrics: Any) -> str:
+        """生成指标的 MD5 哈希"""
+        if not metrics:
+            return "empty"
+        # 确保字典键有序
+        metrics_str = json.dumps(metrics, sort_keys=True, ensure_ascii=False)
+        return hashlib.md5(metrics_str.encode()).hexdigest()
     
     async def ask_ai(self, prompt: str, system_prompt: str = None, max_tokens: int = 2000, timeout: int = None) -> Dict[str, Any]:
         """通用AI问答接口（供其他模块调用）"""
@@ -303,8 +259,9 @@ class AIService:
         metrics: Dict[str, Any]
     ) -> Dict[str, Any]:
         """生成基金分析"""
-        # 检查缓存
-        cache_key = f"analysis_{code}_{metrics.get('nav_date', 'unknown')}"
+        # 统一缓存键策略: 功能:代码:指标哈希
+        metrics_hash = self._generate_metrics_hash(metrics)
+        cache_key = f"fund_analysis:{code}:{metrics_hash}"
         cached = self.db.get_ai_cache(cache_key)
         if cached:
             return {
@@ -481,14 +438,11 @@ class AIService:
         
         try:
             # 0. 检查缓存
-            import hashlib
-            try:
-                from ..utils.cache import get_cache_manager
-            except (ImportError, ValueError):
-                from utils.cache import get_cache_manager
-            
-            portfolio_str = "|".join([f"{p['fund_code']}:{p.get('shares',0)}" for p in portfolio_data])
-            cache_key = f"diag:{hashlib.md5(portfolio_str.encode()).hexdigest()}"
+            metrics_hash = self._generate_metrics_hash({
+                "portfolio": [{"c": p['fund_code'], "s": p.get('shares', 0)} for p in portfolio_data],
+                "stats": stats
+            })
+            cache_key = f"portfolio_diagnosis:{metrics_hash}"
             cache = get_cache_manager()
             cached = cache.get(cache_key)
             if cached:
@@ -685,10 +639,9 @@ class AIService:
     async def generate_structured_fund_analysis(self, fund_name: str, code: str, metrics: Dict[str, Any]) -> Dict[str, Any]:
         """生成结构化基金分析 - 遵循 v4.0 JSON 协议"""
         try:
-            import hashlib
-            # Create a unique cache key based on fund details and metrics
-            metrics_str = json.dumps(metrics, sort_keys=True)
-            cache_key = f"structured_fund_analysis:{hashlib.md5(f'{fund_name}_{code}_{metrics_str}'.encode()).hexdigest()}"
+            # Create a unique cache key based on metrics hash
+            metrics_hash = self._generate_metrics_hash(metrics)
+            cache_key = f"structured_analysis:{code}:{metrics_hash}"
             
             cached_result = self.db.get_ai_cache(cache_key)
             if cached_result:
@@ -828,9 +781,8 @@ class AIService:
         """生成经理 AI 评级与风格画像"""
         try:
             # 检查缓存
-            import hashlib
-            key_src = f"{name}_{career_summary}"
-            cache_key = f"mgr_rating:{hashlib.md5(key_src.encode()).hexdigest()}"
+            summary_hash = hashlib.md5(career_summary.encode()).hexdigest()
+            cache_key = f"manager_rating:{name}:{summary_hash}"
             cached_json = self.db.get_ai_cache(cache_key)
             if cached_json:
                 try:

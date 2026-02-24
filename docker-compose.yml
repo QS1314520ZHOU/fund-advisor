@@ -11,12 +11,4 @@ services:
       - ./.env:/app/.env
     environment:
       - TZ=Asia/Shanghai
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-    restart: unless-stopped
-
-  redis:
-    image: redis:alpine
-    container_name: fund-advisor-redis
     restart: unless-stopped

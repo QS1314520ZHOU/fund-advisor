@@ -5,10 +5,12 @@
 
 import time
 import logging
+import re
 # import akshare as ak <-- deleted
 import pandas as pd
 import requests
 import datetime
+import threading
 from typing import Optional, List, Dict, Any
 from functools import wraps
 
@@ -16,16 +18,18 @@ logger = logging.getLogger(__name__)
 
 
 class RateLimiter:
-    """请求限速器"""
+    """请求限速器 - 线程安全版"""
     def __init__(self, min_interval: float = 0.6):
         self.min_interval = min_interval
         self.last_request_time = 0
+        self.lock = threading.Lock()
     
     def wait(self):
-        elapsed = time.time() - self.last_request_time
-        if elapsed < self.min_interval:
-            time.sleep(self.min_interval - elapsed)
-        self.last_request_time = time.time()
+        with self.lock:
+            elapsed = time.time() - self.last_request_time
+            if elapsed < self.min_interval:
+                time.sleep(self.min_interval - elapsed)
+            self.last_request_time = time.time()
 
 
 def with_retry(max_retries: int = 5, delay: float = 3, backoff: float = 2.0):
@@ -176,11 +180,18 @@ class DataFetcher:
             fund_type = row['基金类型']
             
             if not skip_filter:
-                should_exclude = any(kw in name for kw in self.EXCLUDE_KEYWORDS)
-                if should_exclude:
+                # 排除指定的关键字
+                if any(kw in name for kw in self.EXCLUDE_KEYWORDS):
                     continue
                 
-                if len(name) > 1 and name[-1] in 'BCDEHR' and name[-2] not in '0123456789':
+                # 正则判定基金份额 (A/C/B等)
+                # 通常我们优先关注 A 类或无后缀类，排除 C, B, D, E, H, R 等
+                # 规则：如果简称以 B, C, D, E, H, R 结尾，且前面不是数字（排除像 '300' 这种）
+                if re.search(r'(?<!\d)[BCDEHR]$', name):
+                    continue
+                
+                # 排除 ETF 联接基金的 C 类 (重复)
+                if '联接C' in name or '联接E' in name:
                     continue
             
             themes = self.identify_themes(name)
@@ -809,30 +820,61 @@ class DataFetcher:
 
 
     def get_fund_manager_info(self, code: str) -> Dict[str, Any]:
-        """获取基金经理信息"""
+        """获取基金经理信息 (真实数据版)"""
+        import akshare as ak
         try:
-            # 模拟数据
-            return {
-                "name": "张三",
-                "tenure": "3年125天",
-                "scale": "50.23亿",
-                "best_return": "125.4%",
-                "company": "易方达基金"
-            }
+            code = str(code).zfill(6)
+            df = ak.fund_manager_em(symbol=code)
+            if df is not None and not df.empty:
+                # 获取当前任职的经理（通常是第一行或根据“是否在任”筛选）
+                # 列名参考: ['基金代码', '基金简称', '现任基金经理', '任职时间', '下任基金经理', '管理规模', '基金公司']
+                latest = df.iloc[0]
+                return {
+                    "name": str(latest.get("现任基金经理", "未知")),
+                    "tenure": str(latest.get("任职时间", "未知")),
+                    "scale": str(latest.get("管理规模", "未知")),
+                    "company": str(latest.get("基金公司", "未知")),
+                    "is_real": True
+                }
         except Exception as e:
-            logger.error(f"获取基金经理失败: {e}")
-            return {}
+            logger.warning(f"获取基金 {code} 经理信息失败: {e}")
+        return {}
 
     def get_fund_ranks(self, code: str) -> List[Dict[str, Any]]:
-        """获取基金在同类中的排名"""
-        # 模拟排名数据，增加同类平均字段
-        return [
-            {"period": "近1周", "rank": "15/1024", "percent": 0.8, "peer_avg": 0.5},
-            {"period": "近1月", "rank": "45/1024", "percent": 3.2, "peer_avg": 2.1},
-            {"period": "近3月", "rank": "12/1024", "percent": 12.5, "peer_avg": 8.4},
-            {"period": "近6月", "rank": "5/1024", "percent": 25.6, "peer_avg": 18.2},
-            {"period": "近1年", "rank": "8/1000", "percent": 45.3, "peer_avg": 32.1},
-        ]
+        """获取基金同类排名 (真实数据版)"""
+        import akshare as ak
+        try:
+            code = str(code).zfill(6)
+            # 使用开考开放式基金排行获取同类排名
+            # 这里逻辑较复杂，建议从排行中查找单只
+            df = ak.fund_open_fund_rank_em()
+            if df is not None and not df.empty:
+                fund_row = df[df['基金代码'] == code]
+                if not fund_row.empty:
+                    row = fund_row.iloc[0]
+                    # 构造与前端兼容的排名结构
+                    periods = [
+                        ("近1周", "近1周"),
+                        ("近1月", "近1月"),
+                        ("近3月", "近3月"),
+                        ("近6月", "近6月"),
+                        ("近1年", "近1年")
+                    ]
+                    ranks = []
+                    for label, col in periods:
+                        val = row.get(col)
+                        if val is not None and str(val) != '---':
+                            ranks.append({
+                                "period": label,
+                                "rank": val, # 排行接口通常直接返回百分比或具体排行
+                                "is_real": True
+                            })
+                    return ranks
+        except Exception as e:
+            logger.warning(f"获取基金 {code} 排名失败: {e}")
+        
+        # Fallback to local logic if needed or return empty
+        return []
 
     def get_realtime_valuation_batch(self, codes: List[str]) -> Dict[str, Dict]:
         """
@@ -905,35 +947,7 @@ class DataFetcher:
                 results[code] = self.valuation_cache[code]
         return results
 
-    def get_realtime_estimation_chart(self, code: str) -> List[Dict]:
-        """
-        获取基金今日估值走势 (模拟数据，因为akshare目前没有稳定的分时估算接口)
-        实际生产中通常需要从第三方分时接口获取
-        """
-        # 返回模拟的今日分时数据，用于前端展示趋势
-        import random
-        from datetime import datetime, timedelta
-        
-        results = []
-        base_time = datetime.now().replace(hour=9, minute=30, second=0, microsecond=0)
-        
-        # 基金实时估值（作为最后一个点）
-        val_data = self.get_realtime_valuation_batch([code]).get(code)
-        last_growth = val_data['estimation_growth'] if val_data else 0.0
-        
-        points = 20
-        for i in range(points):
-            t = base_time + timedelta(minutes=i * 15)
-            if t > datetime.now(): break
-            
-            # 简单的随机游走模拟
-            growth = last_growth * (i + 1) / points + random.uniform(-0.1, 0.1)
-            results.append({
-                'time': t.strftime('%H:%M'),
-                'growth': round(growth, 2)
-            })
-            
-        return results
+    # get_realtime_estimation_chart 已删除 ( fake data)
 
 _data_fetcher: Optional[DataFetcher] = None
 

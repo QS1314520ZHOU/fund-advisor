@@ -14,27 +14,41 @@ logger = logging.getLogger(__name__)
 try:
     from ..services.snapshot import get_snapshot_service
     from ..services.ai_service import get_ai_service
-    from ..services.vector_service import get_vector_service
+    # from ..services.vector_service import get_vector_service
     from ..services.data_fetcher import get_data_fetcher
     from ..services.news_service import get_news_service
-    from ..services.prediction_service import get_trend_predictor
+    # from ..services.prediction_service import get_trend_predictor
     from ..services.backtest_service import get_backtest_service
     from ..services.macro_service import get_macro_service
     from ..services.sector_service import get_sector_service
-    from ..services.watchlist_service import get_watchlist_service
+    # from ..services.watchlist_service import get_watchlist_service
     from ..database import get_db
+    from ..services.fee_service import get_fee_service
+    from ..services.health_service import get_health_service
+    from ..services.style_service import get_style_service
+    from ..services.investment_service import get_investment_service
+    from ..services.calendar_service import get_calendar_service
+    from ..services.money_flow_service import get_money_flow_service
+    from .responses import ApiResponse, success_response, error_response
 except (ImportError, ValueError):
     from services.snapshot import get_snapshot_service
     from services.ai_service import get_ai_service
-    from services.vector_service import get_vector_service
+    # from services.vector_service import get_vector_service
     from services.data_fetcher import get_data_fetcher
     from services.news_service import get_news_service
-    from services.prediction_service import get_trend_predictor
+    # from services.prediction_service import get_trend_predictor
     from services.backtest_service import get_backtest_service
     from services.macro_service import get_macro_service
     from services.sector_service import get_sector_service
-    from services.watchlist_service import get_watchlist_service
+    # from services.watchlist_service import get_watchlist_service
     from database import get_db
+    from services.fee_service import get_fee_service
+    from services.health_service import get_health_service
+    from services.style_service import get_style_service
+    from services.investment_service import get_investment_service
+    from services.calendar_service import get_calendar_service
+    from services.money_flow_service import get_money_flow_service
+    from api.responses import ApiResponse, success_response, error_response
 import logging
 import time
 import datetime
@@ -78,74 +92,12 @@ async def get_recommendations(
     try:
         service = get_snapshot_service()
         result = await service.get_recommendations(theme=theme, category=category)
-        return result
+        return success_response(data=result)
     except Exception as e:
-        return {
-            'success': False,
-            'error': str(e),
-            'data': []
-        }
+        logger.error(f"Failed to get recommendations: {e}")
+        return error_response(error=str(e))
 
-@router.get("/predict_tomorrow")
-async def predict_tomorrow(limit: int = 10):
-    """
-    预测明天将上涨的基金 (并发优化版)
-    """
-    try:
-        db = get_db()
-        snapshot = db.get_latest_snapshot()
-        if not snapshot:
-            return {'success': False, 'error': '暂无快照数据'}
-            
-        funds = db.get_recommendations(snapshot_id=snapshot['id'], limit=30)
-        predictor = get_trend_predictor()
-        fetcher = get_data_fetcher()
-        
-        import asyncio
-        
-        async def process_fund(fund):
-            try:
-                code = fund['code']
-                # 使用 to_thread 异步执行同步的 data fetching
-                nav_df = await asyncio.to_thread(fetcher.get_fund_nav, code)
-                
-                if nav_df is not None:
-                    prediction = predictor.predict_trend(nav_df)
-                    if prediction['prediction'] == 'up':
-                        return {
-                            'code': code,
-                            'name': fund['name'],
-                            'prediction': prediction['prediction'],
-                            'probability': prediction['probability'],
-                            'confidence': prediction['confidence'],
-                            'score': prediction['final_score'],
-                            'nav': fund.get('latest_nav', 0),
-                            'change': fund.get('return_1d', 0)
-                        }
-            except Exception as e:
-                pass
-            return None
-
-        # 并发执行所有基金的分析
-        tasks = [process_fund(fund) for fund in funds]
-        results = await asyncio.gather(*tasks)
-        
-        # 过滤掉 None 结果
-        valid_results = [r for r in results if r is not None]
-        
-        # 按得分排序
-        valid_results.sort(key=lambda x: x['score'], reverse=True)
-        return {
-            'success': True,
-            'results': valid_results[:limit],
-            'total': len(valid_results)
-        }
-    except Exception as e:
-        logger.error(f"Prediction failed: {e}")
-        return {
-            'success': False,
-            'error': str(e)
-        }
+# /predict_tomorrow 已删除
 
 
 # 在全局范围添加简单的缓存来加速在线搜索
@@ -169,17 +121,16 @@ async def search_funds(q: str, limit: int = 10):
         db = get_db()
         q = q.strip()
         if not q:
-            return {'success': True, 'results': [], 'total': 0}
+            return success_response(data={'results': [], 'total': 0})
             
         # 1. 6位数字精确匹配代码
         if q.isdigit() and len(q) == 6:
             fund = db.get_fund(q)
             if fund:
-                return {
-                    'success': True,
+                return success_response(data={
                     'results': [{**fund, 'is_online': False}],
                     'total': 1
-                }
+                })
             
             # 本地未找到，尝试在线查找
             try:
@@ -195,8 +146,7 @@ async def search_funds(q: str, limit: int = 10):
                 all_funds_df = _online_fund_cache['data']
                 fund_row = all_funds_df[all_funds_df['基金代码'] == q]
                 if not fund_row.empty:
-                    return {
-                        'success': True,
+                    return success_response(data={
                         'results': [{
                             'code': q,
                             'name': fund_row.iloc[0]['基金简称'],
@@ -204,11 +154,11 @@ async def search_funds(q: str, limit: int = 10):
                             'is_online': True
                         }],
                         'total': 1
-                    }
+                    })
             except Exception as e:
                 logger.warning(f"在线查找代码 {q} 失败: {e}")
 
-            return {'success': True, 'results': [], 'total': 0, 'message': f'未找到代码为 {q} 的基金'}
+            return success_response(data={'results': [], 'total': 0}, message=f'未找到代码为 {q} 的基金')
         
         # 2. 模糊搜索名称
         # 优先在本地寻找
@@ -305,14 +255,37 @@ async def search_funds(q: str, limit: int = 10):
                     if len(results) >= limit * 2:
                         break
         except Exception as online_err:
-            import traceback
-            logger.warning(f"在线名称搜索失败: {online_err}\n{traceback.format_exc()}")
-                
-        return {
-            'success': True,
-            'results': results[:limit * 2],
-            'total': len(results)
-        }
+            logger.warning(f"在线名称搜索失败: {online_err}")
+
+            # 4. 后处理：为搜索结果注入评分并二次排序
+            try:
+                # 获取结果中所有基金的评分
+                codes = [r['code'] for r in results]
+                snapshot = db.get_latest_snapshot()
+                if snapshot:
+                    # 批量获取本地数据库中的指标（含评分）
+                    db_funds = db.get_funds_by_codes(snapshot['id'], codes)
+                    score_map = {f['code']: f.get('score', 0) for f in db_funds}
+                    
+                    # 注入评分
+                    for r in results:
+                        r['score'] = score_map.get(r['code'], 0)
+                        
+                    # 二次排序：(匹配权重 * 0.3) + (评分权重 * 0.7)
+                    def sort_key(x):
+                        match_weight = x.get('_rank', 50) 
+                        score_weight = x.get('score', 0)
+                        return match_weight * 0.3 + score_weight * 0.7
+                        
+                    results.sort(key=sort_key, reverse=True)
+            except Exception as e:
+                logger.warning(f"搜索结果评分排序优化失败: {e}")
+
+            return {
+                'success': True,
+                'results': results[:limit], 
+                'total': len(results)
+            }
     except Exception as e:
         import traceback
         logger.error(f"搜索接口异常: {e}\n{traceback.format_exc()}")
@@ -436,23 +409,7 @@ async def diagnose_portfolio(portfolio: List[Dict[str, Any]]):
         logger.error(f"Portfolio diagnosis failed: {e}")
         return {"success": False, "error": str(e)}
 
-@router.get("/search/deep")
-async def deep_search_translate(q: str):
-    """Deep Search 语义翻译接口"""
-    try:
-        ai_service = get_ai_service()
-        if not ai_service:
-            return {"error": "AI 服务不可用"}
-            
-        deep_data = await ai_service.translate_semantic_query(q)
-        return {
-            "success": True,
-            "filters": deep_data.get("filters", {}),
-            "interpretation": deep_data.get("interpretation", "")
-        }
-    except Exception as e:
-        logger.error(f"Deep search translation failed: {e}")
-        return {"success": False, "error": str(e)}
+# /search/deep 已删除
 
 @router.get("/analyze/{code}/v4")
 async def analyze_fund_v4(code: str):
@@ -2660,6 +2617,95 @@ async def analyze_sector_v1(sector: str, period: str = 'tomorrow'):
         logger.error(f"分析板块 {sector} 失败: {e}")
         return {"status": "error", "message": str(e)}
 
+@router.get("/fund/diagnose/{code}")
+async def diagnose_fund_api(code: str):
+    """
+    获取基金健康度诊断报告
+    """
+    try:
+        db = get_db()
+        # 获取最新快照中的指标
+        snapshot = db.get_latest_snapshot()
+        if not snapshot:
+            return error_response(error="暂无快照数据，请先执行全量更新")
+            
+        metrics = db.get_fund_metrics(snapshot['id'], code)
+        if not metrics:
+            return error_response(error=f"未找到基金 {code} 的指标数据")
+            
+        service = get_health_service()
+        result = service.diagnose_fund(code, metrics.get('name', ''), metrics)
+        return success_response(data=result)
+    except Exception as e:
+        logger.error(f"Fund diagnosis failed for {code}: {e}")
+        return error_response(error=str(e))
+
+@router.get("/fund/style/{code}")
+async def analyze_fund_style_api(code: str):
+    """
+    获取基金风格分析报告
+    """
+    try:
+        fetcher = get_data_fetcher()
+        # 获取历史净值用于分析
+        nav_df = fetcher.get_fund_nav(code)
+        
+        if nav_df is None or nav_df.empty:
+            return error_response(error=f"无法获取基金 {code} 的净值数据")
+            
+        service = get_style_service()
+        result = service.analyze_style(code, nav_df)
+        return success_response(data=result)
+    except Exception as e:
+        logger.error(f"Style analysis failed for {code}: {e}")
+        return error_response(error=str(e))
+
+@router.get("/investment/dca/{code}")
+async def get_smart_dca_advice(code: str, amount: float = Query(1000, description="定投基础额度")):
+    """
+    获取基于均线偏离度的智能定投建议
+    """
+    try:
+        fetcher = get_data_fetcher()
+        nav_df = fetcher.get_fund_nav(code)
+        
+        if nav_df is None or nav_df.empty:
+            return error_response(error=f"无法获取基金 {code} 的净值数据")
+            
+        service = get_investment_service()
+        result = service.calculate_smart_dca(nav_df, base_amount=amount)
+        return success_response(data=result)
+    except Exception as e:
+        logger.error(f"Smart DCA advice failed for {code}: {e}")
+        return error_response(error=str(e))
+
+@router.get("/market/calendar")
+async def get_investment_calendar_api(date: Optional[str] = Query(None, description="开始日期 YYYYMMDD"), 
+                                     days: int = Query(7, ge=1, le=30)):
+    """
+    获取投资日历 (宏观经济事件)
+    """
+    try:
+        service = get_calendar_service()
+        result = service.get_investment_calendar(start_date=date, days=days)
+        return success_response(data=result)
+    except Exception as e:
+        logger.error(f"Failed to get investment calendar: {e}")
+        return error_response(error=str(e))
+
+@router.get("/market/money_flow")
+async def get_big_money_flow_api(limit: int = Query(20, ge=5, le=100)):
+    """
+    获取大额资金流入流出监测 (基于基金份额变动)
+    """
+    try:
+        service = get_money_flow_service()
+        result = service.get_big_money_flows(top_n=limit)
+        return success_response(data=result)
+    except Exception as e:
+        logger.error(f"Failed to get money flow data: {e}")
+        return error_response(error=str(e))
+
 
 # ==================== 专业量化接口 ====================
 
@@ -2671,9 +2717,23 @@ async def run_portfolio_backtest(portfolio: List[Dict[str, Any]]):
     try:
         service = get_backtest_service()
         result = await service.run_backtest(portfolio)
-        return result
+        return success_response(data=result)
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.error(f"Backtest failed: {e}")
+        return error_response(error=str(e))
+
+@router.post("/compare/fees")
+async def compare_funds_fees(req: CompareRequest):
+    """
+    对比多只基金的费率结构
+    """
+    try:
+        service = get_fee_service()
+        result = service.compare_fees(req.codes)
+        return success_response(data=result)
+    except Exception as e:
+        logger.error(f"Fee comparison failed: {e}")
+        return error_response(error=str(e))
 
 @router.get("/macro/dashboard")
 async def get_macro_dashboard():
@@ -2683,9 +2743,10 @@ async def get_macro_dashboard():
     try:
         service = get_macro_service()
         result = await service.get_macro_dashboard()
-        return result
+        return success_response(data=result)
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.error(f"Macro dashboard failed: {e}")
+        return error_response(error=str(e))
 
 @router.get("/fee/calculate")
 async def calculate_fee_api(amount: float, years: int, rate: float):
@@ -2714,60 +2775,58 @@ async def get_watchlist_realtime():
     获取自选列表及实时估值数据
     """
     try:
-        ws = get_watchlist_service()
-        items = ws.get_watchlist()
+        db = get_db()
+        items = db.get_watchlist()
         if not items:
-            return {'success': True, 'data': []}
+            return success_response(data=[])
             
         fetcher = get_data_fetcher()
-        codes = [item['code'] for item in items]
+        codes = [item['fund_code'] for item in items]
         
         # 批量获取估值
         valuations = fetcher.get_realtime_valuation_batch(codes)
         
         results = []
         for item in items:
-            code = item['code']
+            code = item['fund_code']
             val = valuations.get(code, {})
             
-            # 获取分时走势
-            chart = fetcher.get_realtime_estimation_chart(code)
+            # 分时走势已删除（因其使用随机模拟数据）
             
             results.append({
                 'code': code,
-                'name': item['name'],
+                'name': item['fund_name'],
                 'estimation_nav': val.get('estimation_nav', 0),
                 'estimation_growth': val.get('estimation_growth', 0),
                 'nav': val.get('nav', 0),
                 'nav_date': val.get('nav_date', ''),
                 'update_time': val.get('time', ''),
-                'chart_data': chart
+                'notes': item.get('notes', '')
             })
             
-        return {'success': True, 'data': results}
+        return success_response(data=results)
     except Exception as e:
         logger.error(f"Get realtime watchlist failed: {e}")
-        return {'success': False, 'error': str(e)}
+        return error_response(error=str(e))
 
 @router.post("/watchlist/add")
 async def add_to_watchlist(req: WatchlistAddRequest):
     """添加自选"""
     try:
-        ws = get_watchlist_service()
-        ws.add_to_watchlist(req.code, req.name)
-        return {'success': True, 'message': '已加入自选'}
+        db = get_db()
+        db.add_to_watchlist(req.code, req.name)
+        return success_response(message='已加入自选')
     except Exception as e:
-        logger.error(f"Add validation failed: {e}")
-        return {'success': False, 'error': str(e)}
-    except Exception as e:
-        return {'success': False, 'error': str(e)}
+        logger.error(f"Add watchlist failed: {e}")
+        return error_response(error=str(e))
 
 @router.post("/watchlist/remove")
 async def remove_from_watchlist(req: WatchlistRemoveRequest):
     """移除自选"""
     try:
-        ws = get_watchlist_service()
-        ws.remove_from_watchlist(req.code)
-        return {'success': True, 'message': '已移除'}
+        db = get_db()
+        db.remove_from_watchlist(req.code)
+        return success_response(message='已移除')
     except Exception as e:
-        return {'success': False, 'error': str(e)}
+        logger.error(f"Remove watchlist failed: {e}")
+        return error_response(error=str(e))

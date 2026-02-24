@@ -4,43 +4,26 @@ import logging
 import os
 import time
 from typing import Any, Optional
-try:
-    import redis
-except ImportError:
-    redis = None
+from collections import OrderedDict
 
 logger = logging.getLogger(__name__)
 
 class CacheManager:
     """
-    统一缓存管理器：支持 Redis + 本地内存兜底
+    统一缓存管理器：本地内存模式 (带 LRU 淘汰)
     """
-    def __init__(self, redis_url: str = None, expire: int = 3600):
-        self.redis_url = redis_url or os.environ.get("REDIS_URL")
+    def __init__(self, expire: int = 3600, max_items: int = 1000):
         self.default_expire = expire
-        self.client = None
-        self.local_cache = {} # 内存兜底
+        self.max_items = max_items
+        self.local_cache = OrderedDict() # 内存缓存，使用 OrderedDict 实现 LRU
         
-        if self.redis_url:
-            try:
-                self.client = redis.from_url(self.redis_url, decode_responses=True)
-                self.client.ping()
-                logger.info(f"Redis 缓存连接成功: {self.redis_url}")
-            except Exception as e:
-                logger.warning(f"Redis 连接失败，切换至本地内存模式: {e}")
-                self.client = None
-
     def get(self, key: str) -> Optional[Any]:
-        if self.client:
-            try:
-                val = self.client.get(key)
-                return json.loads(val) if val else None
-            except Exception as e:
-                logger.error(f"Redis GET 异常: {e}")
-        
         # 本地内存模式
         if key in self.local_cache:
             entry = self.local_cache[key]
+            # 移动到末尾表示最近使用
+            self.local_cache.move_to_end(key)
+            
             if entry['expire'] > time.time():
                 return entry['val']
             else:
@@ -49,25 +32,18 @@ class CacheManager:
 
     def set(self, key: str, value: Any, expire: int = None):
         exp = expire or self.default_expire
-        if self.client:
-            try:
-                self.client.set(key, json.dumps(value, ensure_ascii=False), ex=exp)
-                return
-            except Exception as e:
-                logger.error(f"Redis SET 异常: {e}")
         
-        # 本地内存模式
+        # 淘汰最旧的项
+        if key not in self.local_cache and len(self.local_cache) >= self.max_items:
+            self.local_cache.popitem(last=False)
+            
         self.local_cache[key] = {
             'val': value,
             'expire': time.time() + exp
         }
+        self.local_cache.move_to_end(key)
 
     def delete(self, key: str):
-        if self.client:
-            try:
-                self.client.delete(key)
-            except Exception:
-                pass
         if key in self.local_cache:
             del self.local_cache[key]
 

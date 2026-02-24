@@ -12,11 +12,13 @@ try:
     from ..services.snapshot import get_snapshot_service
     from ..services.ai_service import get_ai_service
     from ..database import get_db
+    from .responses import ApiResponse, success_response, error_response
 except (ImportError, ValueError):
     from config import get_settings
     from services.snapshot import get_snapshot_service
     from services.ai_service import get_ai_service
     from database import get_db
+    from api.responses import ApiResponse, success_response, error_response
 
 router = APIRouter(prefix="/admin")
 
@@ -65,25 +67,22 @@ async def trigger_snapshot_update(
     
     # 检查是否正在更新
     if service.is_updating():
-        return {
-            'success': False,
-            'error': '更新任务正在进行中，请等待完成',
-            'progress': service.get_progress()
-        }
+        return error_response(
+            error='更新任务正在进行中，请等待完成',
+            message=f"当前进度: {service.get_progress()}%"
+        )
     
     if async_mode:
         # 异步执行
         background_tasks.add_task(service.create_full_snapshot, max_qualified)
-        return {
-            'success': True,
-            'message': '更新任务已启动',
-            'async': True,
-            'tip': '请通过 GET /update-status 查看进度'
-        }
+        return success_response(
+            message='更新任务已启动',
+            data={'async': True, 'tip': '请通过 GET /api/v1/admin/update-status 查看进度'}
+        )
     else:
         # 同步执行（阻塞）
         result = service.create_full_snapshot(max_qualified=max_qualified)
-        return result
+        return ApiResponse(**result) if isinstance(result, dict) else success_response(data=result)
 
 
 @router.post("/update/fund-list")
@@ -442,27 +441,3 @@ async def test_ai_connection(
             'error': str(e)
         }
 
-@router.post("/build-static")
-async def build_static_storage(
-    background_tasks: BackgroundTasks,
-    x_admin_token: Optional[str] = Header(None),
-    test_mode: bool = Query(False, description="是否为测试模式(处理10个基金)")
-):
-    """手动触发静态 JSON 存储的构建 (Phase 1 核心闭环)"""
-    verify_admin_token(x_admin_token)
-    
-    try:
-        from ..scripts.crawler_worker import run_worker
-        background_tasks.add_task(run_worker, test_mode)
-    except Exception as e:
-        import traceback
-        error_info = traceback.format_exc()
-        # logger.error(f"Failed to trigger crawler_worker: {error_info}")
-        return {"success": False, "error": str(e)}
-    
-    return {
-        'success': True,
-        'message': f"静态数据构建任务已启动 (测试模式: {test_mode})",
-        'storage_path': "/static/storage/",
-        'note': "请通过服务器日志查看实时生成进度"
-    }

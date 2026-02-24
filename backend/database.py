@@ -39,7 +39,7 @@ class Database:
         settings = get_settings()
         self.db_path = settings.DATABASE_PATH
         self._local = threading.local()
-        self._init_tables()
+        self._check_migrations()
         self._initialized = True
         logger.info(f"数据库初始化完成: {self.db_path}")
     
@@ -68,191 +68,221 @@ class Database:
         finally:
             cursor.close()
     
-    def _init_tables(self):
-        """初始化数据库表"""
+    def _check_migrations(self):
+        """检查并执行数据库迁移"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         try:
-            # 基金基础信息表
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS funds (
-                    code TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    fund_type TEXT,
-                    themes TEXT,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+            # 1. 初始化表
+            self._init_tables(cursor)
             
-            # 快照表
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS snapshots (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    snapshot_date TEXT NOT NULL,
-                    total_funds INTEGER DEFAULT 0,
-                    qualified_funds INTEGER DEFAULT 0,
-                    benchmark TEXT DEFAULT '000300.SH',
-                    status TEXT DEFAULT 'running',
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    completed_at TEXT
-                )
-            """)
+            # 2. 获取当前版本
+            cursor.execute("SELECT version FROM schema_version")
+            row = cursor.fetchone()
+            current_version = row[0] if row else 0
             
-            # 基金指标表
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS fund_metrics (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    snapshot_id INTEGER NOT NULL,
-                    code TEXT NOT NULL,
-                    name TEXT,
-                    score REAL,
-                    labels TEXT,
-                    reasons TEXT,
-                    themes TEXT,
-                    latest_nav REAL,
-                    nav_date TEXT,
-                    alpha REAL,
-                    beta REAL,
-                    sharpe REAL,
-                    annual_return REAL,
-                    volatility REAL,
-                    max_drawdown REAL,
-                    current_drawdown REAL,
-                    win_rate REAL,
-                    profit_loss_ratio REAL,
-                    return_1w REAL,
-                    return_1m REAL,
-                    return_3m REAL,
-                    return_6m REAL,
-                    return_1y REAL,
-                    return_1d REAL,
-                    data_days INTEGER,
-                    raw_metrics TEXT,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (snapshot_id) REFERENCES snapshots(id),
-                    UNIQUE(snapshot_id, code)
-                )
-            """)
+            # 3. 定义迁移任务
+            # 版本号从 1 开始
+            migrations = [
+                # v1: 初始版本 (已经在 _init_tables 中创建)
+                # v2: 为 fund_metrics 添加 return_1d 列 (示例，实际已在初始表中包含)
+                (1, "初始版本", None),
+                # (2, "添加 return_1d 到 fund_metrics", "ALTER TABLE fund_metrics ADD COLUMN return_1d REAL"),
+            ]
             
-            # AI 缓存表
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS ai_cache (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    cache_key TEXT UNIQUE NOT NULL,
-                    content TEXT,
-                    model TEXT,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    expires_at TEXT
-                )
-            """)
+            for version, description, sql in migrations:
+                if version > current_version:
+                    logger.info(f"正在执行数据库迁移 v{version}: {description}")
+                    if sql:
+                        cursor.execute(sql)
+                    
+                    # 更新版本号
+                    cursor.execute("UPDATE schema_version SET version = ?, updated_at = CURRENT_TIMESTAMP", (version,))
+                    if cursor.rowcount == 0:
+                        cursor.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+                    conn.commit()
             
-            # 更新日志表
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS update_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_type TEXT NOT NULL,
-                    status TEXT DEFAULT 'running',
-                    funds_processed INTEGER DEFAULT 0,
-                    funds_qualified INTEGER DEFAULT 0,
-                    message TEXT,
-                    started_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    completed_at TEXT
-                )
-            """)
-            
-            # 自选基金表 (新增)
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS watchlist (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    fund_code TEXT NOT NULL,
-                    fund_name TEXT,
-                    user_id TEXT DEFAULT 'default',
-                    notes TEXT,
-                    added_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(fund_code, user_id)
-                )
-            """)
-            
-            # 净值历史缓存表 (新增)
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS nav_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    fund_code TEXT NOT NULL,
-                    nav_date TEXT NOT NULL,
-                    nav REAL,
-                    acc_nav REAL,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(fund_code, nav_date)
-                )
-            """)
-            
-            # 持仓模拟表
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS portfolio (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    fund_code TEXT NOT NULL,
-                    fund_name TEXT,
-                    user_id TEXT DEFAULT 'default',
-                    shares REAL NOT NULL,
-                    cost_price REAL NOT NULL,
-                    buy_date TEXT NOT NULL,
-                    sell_date TEXT,
-                    sell_price REAL,
-                    status TEXT DEFAULT 'holding',
-                    notes TEXT,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(fund_code, user_id, buy_date)
-                )
-            """)
-            
-            # 推荐历史表
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS recommendation_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    snapshot_id INTEGER NOT NULL,
-                    recommend_date TEXT NOT NULL,
-                    fund_code TEXT NOT NULL,
-                    fund_name TEXT,
-                    category TEXT,
-                    score REAL,
-                    nav_at_recommend REAL,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(snapshot_id, fund_code, category)
-                )
-            """)
-            
-            # 创建索引
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_metrics_snapshot ON fund_metrics(snapshot_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_metrics_code ON fund_metrics(code)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_metrics_score ON fund_metrics(score DESC)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_date ON snapshots(snapshot_date DESC)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_ai_cache_key ON ai_cache(cache_key)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlist(user_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_nav_history_code ON nav_history(fund_code, nav_date DESC)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_user ON portfolio(user_id, status)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_rec_history_date ON recommendation_history(recommend_date DESC)")
-            
-            conn.commit()
-            
-            # 数据库迁移：确保 return_1d 列存在
-            try:
-                cursor.execute("ALTER TABLE fund_metrics ADD COLUMN return_1d REAL")
-                conn.commit()
-                logger.info("数据库迁移：已添加 return_1d 列")
-            except sqlite3.OperationalError:
-                # 已经存在该列，忽略错误
-                pass
-                
-            logger.info("数据库表初始化完成")
+            logger.info("数据库迁移检查完成")
             
         except Exception as e:
-            logger.error(f"数据库初始化失败: {e}")
+            conn.rollback()
+            logger.error(f"数据库迁移失败: {e}")
             raise
         finally:
             cursor.close()
             conn.close()
+
+    def _init_tables(self, cursor):
+        """初始化基础数据库表"""
+        # 版本管理表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # 基金基础信息表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS funds (
+                code TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                fund_type TEXT,
+                themes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # 快照表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_date TEXT NOT NULL,
+                total_funds INTEGER DEFAULT 0,
+                qualified_funds INTEGER DEFAULT 0,
+                benchmark TEXT DEFAULT '000300.SH',
+                status TEXT DEFAULT 'running',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                completed_at TEXT
+            )
+        """)
+        
+        # 基金指标表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS fund_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_id INTEGER NOT NULL,
+                code TEXT NOT NULL,
+                name TEXT,
+                score REAL,
+                labels TEXT,
+                reasons TEXT,
+                themes TEXT,
+                latest_nav REAL,
+                nav_date TEXT,
+                alpha REAL,
+                beta REAL,
+                sharpe REAL,
+                annual_return REAL,
+                volatility REAL,
+                max_drawdown REAL,
+                current_drawdown REAL,
+                win_rate REAL,
+                profit_loss_ratio REAL,
+                return_1w REAL,
+                return_1m REAL,
+                return_3m REAL,
+                return_6m REAL,
+                return_1y REAL,
+                return_1d REAL,
+                data_days INTEGER,
+                raw_metrics TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (snapshot_id) REFERENCES snapshots(id),
+                UNIQUE(snapshot_id, code)
+            )
+        """)
+        
+        # AI 缓存表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ai_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cache_key TEXT UNIQUE NOT NULL,
+                content TEXT,
+                model TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                expires_at TEXT
+            )
+        """)
+        
+        # 更新日志表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS update_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_type TEXT NOT NULL,
+                status TEXT DEFAULT 'running',
+                funds_processed INTEGER DEFAULT 0,
+                funds_qualified INTEGER DEFAULT 0,
+                message TEXT,
+                started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                completed_at TEXT
+            )
+        """)
+        
+        # 自选基金表 (新增)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS watchlist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fund_code TEXT NOT NULL,
+                fund_name TEXT,
+                user_id TEXT DEFAULT 'default',
+                notes TEXT,
+                added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(fund_code, user_id)
+            )
+        """)
+        
+        # 净值历史缓存表 (新增)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS nav_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fund_code TEXT NOT NULL,
+                nav_date TEXT NOT NULL,
+                nav REAL,
+                acc_nav REAL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(fund_code, nav_date)
+            )
+        """)
+        
+        # 持仓模拟表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS portfolio (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fund_code TEXT NOT NULL,
+                fund_name TEXT,
+                user_id TEXT DEFAULT 'default',
+                shares REAL NOT NULL,
+                cost_price REAL NOT NULL,
+                buy_date TEXT NOT NULL,
+                sell_date TEXT,
+                sell_price REAL,
+                status TEXT DEFAULT 'holding',
+                notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(fund_code, user_id, buy_date)
+            )
+        """)
+        
+        # 推荐历史表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS recommendation_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_id INTEGER NOT NULL,
+                recommend_date TEXT NOT NULL,
+                fund_code TEXT NOT NULL,
+                fund_name TEXT,
+                category TEXT,
+                score REAL,
+                nav_at_recommend REAL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(snapshot_id, fund_code, category)
+            )
+        """)
+        
+        # 创建索引
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_metrics_snapshot ON fund_metrics(snapshot_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_metrics_code ON fund_metrics(code)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_metrics_score ON fund_metrics(score DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_date ON snapshots(snapshot_date DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ai_cache_key ON ai_cache(cache_key)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlist(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_nav_history_code ON nav_history(fund_code, nav_date DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_user ON portfolio(user_id, status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rec_history_date ON recommendation_history(recommend_date DESC)")
+        
+        logger.info("数据库基础表初始化完成")
     
     # ==================== 基金操作 ====================
     
@@ -581,25 +611,50 @@ class Database:
     
     def get_qualified_funds(self, snapshot_id: int) -> List[Dict]:
         """获取快照中所有入选基金"""
-        with self.get_cursor() as cursor:
-            cursor.execute("""
-                SELECT * FROM fund_metrics 
-                WHERE snapshot_id = ?
-                ORDER BY score DESC
-            """, (snapshot_id,))
-            
-            results = []
-            for row in cursor.fetchall():
-                item = dict(row)
-                # 解析 JSON 字段
-                for field in ['labels', 'reasons', 'themes']:
-                    if item.get(field):
-                        try:
-                            item[field] = json.loads(item[field])
-                        except:
-                            item[field] = []
-                results.append(item)
-            return results
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT f.code, f.name, f.fund_type, f.themes, m.*
+                    FROM fund_metrics m
+                    JOIN funds f ON m.fund_code = f.code
+                    WHERE m.snapshot_id = ?
+                """, (snapshot_id,))
+                columns = [column[0] for column in cursor.description]
+                results = []
+                for row in cursor.fetchall():
+                    item = dict(zip(columns, row))
+                    if item.get('themes'):
+                        item['themes'] = json.loads(item['themes'])
+                    results.append(item)
+                return results
+        except Exception as e:
+            logger.error(f"Failed to get qualified funds: {e}")
+            return []
+
+    def get_funds_by_codes(self, snapshot_id: int, codes: List[str]) -> List[Dict]:
+        """按代码批量获取基金指标"""
+        if not codes:
+            return []
+        try:
+            placeholders = ','.join(['?'] * len(codes))
+            with self.get_cursor() as cursor:
+                cursor.execute(f"""
+                    SELECT f.code, f.name, f.fund_type, f.themes, m.*
+                    FROM fund_metrics m
+                    JOIN funds f ON m.fund_code = f.code
+                    WHERE m.snapshot_id = ? AND f.code IN ({placeholders})
+                """, (snapshot_id, *codes))
+                columns = [column[0] for column in cursor.description]
+                results = []
+                for row in cursor.fetchall():
+                    item = dict(zip(columns, row))
+                    if item.get('themes'):
+                        item['themes'] = json.loads(item['themes'])
+                    results.append(item)
+                return results
+        except Exception as e:
+            logger.error(f"Failed to get funds by codes: {e}")
+            return []
     
     # ==================== AI 缓存操作 ====================
     
