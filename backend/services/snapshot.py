@@ -11,162 +11,24 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from ..database import get_db
-from ..config import get_settings
-from .data_fetcher import get_data_fetcher
+try:
+    from database import get_db
+    from config import get_settings
+    from services.data_fetcher import get_data_fetcher
+    from services.calculator import get_calculator
+except ImportError:
+    from backend.database import get_db
+    from backend.config import get_settings
+    from backend.services.data_fetcher import get_data_fetcher
+    from backend.services.calculator import get_calculator
 
 logger = logging.getLogger(__name__)
-
-
-class MetricsCalculator:
-    """指标计算器"""
-    
-    @staticmethod
-    def calculate_returns(nav_series: pd.Series, periods: Dict[str, int]) -> Dict[str, float]:
-        """计算各期间收益率"""
-        returns = {}
-        if len(nav_series) < 2:
-            return returns
-        
-        latest_nav = nav_series.iloc[-1]
-        
-        for name, days in periods.items():
-            if len(nav_series) >= days:
-                start_nav = nav_series.iloc[-days]
-                ret = (latest_nav / start_nav - 1) * 100
-                returns[name] = round(ret, 2)
-            else:
-                returns[name] = None
-        
-        return returns
-    
-    @staticmethod
-    def calculate_annualized_return(nav_series: pd.Series, days: int) -> float:
-        """计算年化收益率"""
-        if len(nav_series) < 2:
-            return 0.0
-        
-        total_return = nav_series.iloc[-1] / nav_series.iloc[0] - 1
-        years = days / 252  # 交易日
-        if years <= 0:
-            return 0.0
-        
-        annualized = (1 + total_return) ** (1 / years) - 1
-        return round(annualized * 100, 2)
-    
-    @staticmethod
-    def calculate_volatility(returns: pd.Series) -> float:
-        """计算年化波动率"""
-        if len(returns) < 2:
-            return 0.0
-        
-        daily_vol = returns.std()
-        annual_vol = daily_vol * np.sqrt(252)
-        return round(annual_vol * 100, 2)
-    
-    @staticmethod
-    def calculate_max_drawdown(nav_series: pd.Series) -> Tuple[float, float]:
-        """计算最大回撤和当前回撤，返回正数"""
-        if len(nav_series) < 2:
-            return 0.0, 0.0
-        
-        # 计算累计最高点
-        cummax = nav_series.cummax()
-        drawdown = (nav_series - cummax) / cummax
-        
-        max_dd = abs(drawdown.min()) * 100  # 转为正数百分比
-        current_dd = abs(drawdown.iloc[-1]) * 100
-        
-        return round(max_dd, 2), round(current_dd, 2)
-    
-    @staticmethod
-    def calculate_sharpe(returns: pd.Series, risk_free_rate: float = 0.02) -> float:
-        """计算夏普比率"""
-        if len(returns) < 20:
-            return 0.0
-        
-        excess_returns = returns - risk_free_rate / 252
-        if excess_returns.std() == 0:
-            return 0.0
-        
-        sharpe = np.sqrt(252) * excess_returns.mean() / excess_returns.std()
-        return round(sharpe, 2)
-    
-    @staticmethod
-    def calculate_alpha_beta(
-        fund_returns: pd.Series, 
-        benchmark_returns: pd.Series
-    ) -> Tuple[float, float]:
-        """计算 Alpha 和 Beta"""
-        if len(fund_returns) < 20 or len(benchmark_returns) < 20:
-            return 0.0, 1.0
-        
-        # 对齐数据
-        aligned = pd.concat([fund_returns, benchmark_returns], axis=1, join='inner').dropna()
-        if len(aligned) < 20:
-            return 0.0, 1.0
-        
-        fund_ret = aligned.iloc[:, 0]
-        bench_ret = aligned.iloc[:, 1]
-        
-        # 计算 Beta
-        covariance = np.cov(fund_ret, bench_ret)[0, 1]
-        variance = np.var(bench_ret)
-        beta = covariance / variance if variance != 0 else 1.0
-        
-        # 计算 Alpha（年化）
-        alpha = (fund_ret.mean() - beta * bench_ret.mean()) * 252
-        
-        return round(alpha * 100, 2), round(beta, 2)
-    
-    @staticmethod
-    def calculate_win_rate(returns: pd.Series) -> float:
-        """计算胜率"""
-        if len(returns) < 2:
-            return 0.0
-        
-        wins = (returns > 0).sum()
-        total = len(returns.dropna())
-        return round(wins / total * 100, 2) if total > 0 else 0.0
-    
-    @staticmethod
-    def calculate_profit_loss_ratio(returns: pd.Series) -> float:
-        """计算盈亏比"""
-        if len(returns) < 2:
-            return 0.0
-        
-        gains = returns[returns > 0]
-        losses = returns[returns < 0]
-        
-        avg_gain = gains.mean() if len(gains) > 0 else 0
-        avg_loss = abs(losses.mean()) if len(losses) > 0 else 0
-        
-        return round(avg_gain / avg_loss, 2) if avg_loss > 0 else 0.0
 
 
 class SnapshotService:
     """快照服务"""
     
-    # 评分权重配置 - 升级为多因子模型
-    SCORE_WEIGHTS = {
-        # 收益能力 (40%)
-        'alpha': 0.15,
-        'alpha_consistency': 0.10,  # 新增：Alpha稳定性
-        'annual_return': 0.15,
-        
-        # 风险控制 (35%)
-        'sharpe': 0.15,
-        'max_drawdown': 0.10,      # 负向指标
-        'volatility': 0.05,        # 负向指标
-        'downside_sharpe': 0.05,   # 新增：下行夏普
-        
-        # 相对表现 (25%)
-        'peer_percentile': 0.15,   # 新增：同类排名百分位
-        'win_rate': 0.05,
-        'profit_loss_ratio': 0.05
-    }
-    
-    # 收益期间配置
+    # 收益期间配置 (保留供内部参考，主要由 calculator 处理)
     RETURN_PERIODS = {
         'return_1w': 5,
         'return_1m': 20,
@@ -180,7 +42,7 @@ class SnapshotService:
         self.db = get_db()
         self.settings = get_settings()
         self.fetcher = get_data_fetcher()
-        self.calculator = MetricsCalculator()
+        self.calculator = get_calculator()
         
         # 进度状态
         self._progress = {
@@ -295,16 +157,18 @@ class SnapshotService:
                                      f'计算指标: {processed}/{total_to_process}')
                 
                 try:
-                    metrics = self._calculate_fund_metrics(code, nav_df)
+                    # 使用统一的计算器服务
+                    metrics = self.calculator.calculate_metrics(
+                        nav_df, 
+                        benchmark_df=self._benchmark_data,
+                        benchmark_symbol=self.settings.DEFAULT_BENCHMARK
+                    )
+                    
                     if metrics:
                         fund_info = code_to_info.get(code, {})
                         metrics['name'] = fund_info.get('name', '')
                         metrics['fund_type'] = fund_info.get('fund_type', '')
                         metrics['themes'] = fund_info.get('themes', [])
-                        
-                        # 计算综合评分
-                        score = self._calculate_score(metrics)
-                        metrics['score'] = score
                         
                         scored_funds.append(metrics)
                 except Exception as e:
@@ -388,117 +252,8 @@ class SnapshotService:
         finally:
             self._is_updating = False
     
-    def _calculate_fund_metrics(self, code: str, nav_df: pd.DataFrame) -> Optional[Dict]:
-        """计算单只基金的所有指标"""
-        try:
-            if nav_df is None or len(nav_df) < 60:
-                return None
-            
-            nav_series = nav_df['nav']
-            returns = nav_df['daily_return'] / 100  # 转为小数
-            
-            # 基础信息
-            metrics = {
-                'code': code,
-                'latest_nav': round(nav_series.iloc[-1], 4),
-                'nav_date': nav_df['date'].iloc[-1].strftime('%Y-%m-%d'),
-                'return_1d': round(nav_df['daily_return'].iloc[-1], 2) if 'daily_return' in nav_df.columns else 0.0,
-                'data_days': len(nav_df)
-            }
-            
-            # 收益率
-            period_returns = self.calculator.calculate_returns(nav_series, self.RETURN_PERIODS)
-            metrics.update(period_returns)
-            
-            # 年化收益
-            metrics['annual_return'] = self.calculator.calculate_annualized_return(
-                nav_series, len(nav_df)
-            )
-            
-            # 波动率
-            metrics['volatility'] = self.calculator.calculate_volatility(returns)
-            
-            # 最大回撤
-            max_dd, current_dd = self.calculator.calculate_max_drawdown(nav_series)
-            metrics['max_drawdown'] = max_dd
-            metrics['current_drawdown'] = current_dd
-            
-            # 夏普比率
-            metrics['sharpe'] = self.calculator.calculate_sharpe(returns)
-            
-            # Alpha 和 Beta
-            if self._benchmark_data is not None:
-                # 对齐基准数据
-                merged = pd.merge(
-                    nav_df[['date', 'daily_return']],
-                    self._benchmark_data[['date', 'benchmark_return']],
-                    on='date',
-                    how='inner'
-                )
-                
-                if len(merged) >= 60:
-                    fund_ret = merged['daily_return'] / 100
-                    bench_ret = merged['benchmark_return']
-                    
-                    alpha, beta = self.calculator.calculate_alpha_beta(fund_ret, bench_ret)
-                    metrics['alpha'] = alpha
-                    metrics['beta'] = beta
-                else:
-                    metrics['alpha'] = 0.0
-                    metrics['beta'] = 1.0
-            else:
-                metrics['alpha'] = 0.0
-                metrics['beta'] = 1.0
-            
-            # 胜率和盈亏比
-            metrics['win_rate'] = self.calculator.calculate_win_rate(returns)
-            metrics['profit_loss_ratio'] = self.calculator.calculate_profit_loss_ratio(returns)
-            
-            return metrics
-            
-        except Exception as e:
-            logger.debug(f"计算 {code} 指标异常: {e}")
-            return None
-    
-    def _calculate_score(self, metrics: Dict) -> float:
-        """计算综合评分（0-100）"""
-        score = 0.0
-        
-        # Alpha 评分 (归一化到 0-100)
-        alpha = metrics.get('alpha', 0)
-        alpha_score = min(max((alpha + 10) / 30 * 100, 0), 100)
-        score += alpha_score * self.SCORE_WEIGHTS['alpha']
-        
-        # 夏普比率评分
-        sharpe = metrics.get('sharpe', 0)
-        sharpe_score = min(max((sharpe + 0.5) / 3 * 100, 0), 100)
-        score += sharpe_score * self.SCORE_WEIGHTS['sharpe']
-        
-        # 年化收益评分
-        annual_return = metrics.get('annual_return', 0)
-        return_score = min(max((annual_return + 10) / 50 * 100, 0), 100)
-        score += return_score * self.SCORE_WEIGHTS['annual_return']
-        
-        # 最大回撤评分（负向，回撤越小越好）
-        max_dd = metrics.get('max_drawdown', 50)
-        dd_score = max(100 - max_dd * 2, 0)
-        score += dd_score * self.SCORE_WEIGHTS['max_drawdown']
-        
-        # 波动率评分（负向）
-        volatility = metrics.get('volatility', 30)
-        vol_score = max(100 - volatility * 2, 0)
-        score += vol_score * self.SCORE_WEIGHTS['volatility']
-        
-        # 胜率评分
-        win_rate = metrics.get('win_rate', 50)
-        score += win_rate * self.SCORE_WEIGHTS['win_rate']
-        
-        # 盈亏比评分
-        pl_ratio = metrics.get('profit_loss_ratio', 1)
-        pl_score = min(pl_ratio / 2 * 100, 100)
-        score += pl_score * self.SCORE_WEIGHTS['profit_loss_ratio']
-        
-        return round(score, 2)
+    # _calculate_fund_metrics 和 _calculate_score 已移除，改用 calculator.py 的统一逻辑
+
     
     def _assign_investment_labels(self, funds: List[Dict]) -> List[Dict]:
         """为基金分配投资标签"""
@@ -651,19 +406,9 @@ class SnapshotService:
         }
     
     def _get_grade(self, score: float) -> str:
-        """根据分数获取等级"""
-        if score >= 80:
-            return 'A+'
-        elif score >= 70:
-            return 'A'
-        elif score >= 60:
-            return 'B+'
-        elif score >= 50:
-            return 'B'
-        elif score >= 40:
-            return 'C'
-        else:
-            return 'D'
+        """从计算器获取等级 (转发)"""
+        grade, _ = self.calculator._get_grade(int(score))
+        return grade
     
     def _generate_summary(self, funds: List[Dict], theme: str = None) -> str:
         """生成AI摘要"""
@@ -758,13 +503,15 @@ class SnapshotService:
             if self._benchmark_data is None:
                 self._benchmark_data = self.fetcher.get_benchmark_data()
             
-            metrics = self._calculate_fund_metrics(code, nav_data)
+            metrics = self.calculator.calculate_metrics(nav_data, benchmark_df=self._benchmark_data)
             if metrics:
                 metrics['name'] = fund_name
                 metrics['fund_type'] = fund_type
                 metrics['themes'] = themes
-                metrics['score'] = self._calculate_score(metrics)
-                metrics['grade'] = self._get_grade(metrics['score'])
+                
+                # metrics 已经包含 score 和 grade
+                # metrics['score'] = self._calculate_score(metrics)
+                # metrics['grade'] = self._get_grade(metrics['score'])
                 
                 # 准备图表数据（从nav_data中提取）
                 chart_data = self._prepare_chart_data_from_df(nav_data)
@@ -925,6 +672,10 @@ class SnapshotService:
         results = []
         snapshot = self.db.get_latest_snapshot()
         
+        # 获取基准指标 (通常是沪深300)
+        benchmark_code = snapshot.get('benchmark', '000300.SH') if snapshot else '000300.SH'
+        benchmark_metrics = self._get_benchmark_metrics(benchmark_code)
+        
         for code in codes:
             # 1. 获取指标
             fund_data = {}
@@ -937,9 +688,9 @@ class SnapshotService:
                 # 尝试补充基本信息
                 fund_info = self.db.get_fund(code)
                 if fund_info:
-                    fund_data = {'code': code, 'name': fund_info['name']}
+                    fund_data = {'code': code, 'name': fund_info['name'], 'fund_type': fund_info.get('fund_type', '')}
                 else:
-                    fund_data = {'code': code, 'name': code}
+                    fund_data = {'code': code, 'name': code, 'fund_type': ''}
             
             # 2. 获取持仓
             fund_data['holdings'] = self.fetcher.get_fund_holdings(code)
@@ -950,9 +701,14 @@ class SnapshotService:
             # 4. 补充评级
             fund_data['grade'] = self._get_grade(fund_data.get('score', 0))
             
+            # 5. 获取同类平均
+            fund_type = fund_data.get('fund_type', '')
+            if fund_type and snapshot:
+                fund_data['peer_avg'] = self._get_peer_averages(snapshot['id'], fund_type)
+            
             results.append(fund_data)
             
-        # 5. 计算相似度 (如果是两只基金对比)
+        # 6. 计算相似度 (如果是两只基金对比)
         similarity = None
         if len(codes) == 2:
             similarity = self.calculate_holding_similarity(codes[0], codes[1])
@@ -960,8 +716,59 @@ class SnapshotService:
         return {
             'status': 'success',
             'data': results,
-            'similarity': similarity
+            'similarity': similarity,
+            'benchmark': benchmark_metrics
         }
+
+    def _get_benchmark_metrics(self, symbol: str) -> Dict[str, Any]:
+        """获取基准的对比指标"""
+        try:
+            if self._benchmark_data is None:
+                self._benchmark_data = self.fetcher.get_benchmark_data(symbol.replace('.', ''))
+            
+            if self._benchmark_data is not None:
+                # 简单计算几个关键指标
+                df = self._benchmark_data.copy()
+                ret_1y = (df['nav'].iloc[-1] / df['nav'].iloc[-252] - 1) * 100 if len(df) >= 252 else 0
+                
+                df['cum_max'] = df['nav'].cummax()
+                df['drawdown'] = (df['nav'] - df['cum_max']) / df['cum_max']
+                max_dd = df['drawdown'].min() * 100
+                
+                return {
+                    'name': '业绩基准 (HS300)',
+                    'return_1y': round(ret_1y, 2),
+                    'max_drawdown': round(max_dd, 2),
+                    'sharpe': 1.0 # 假设基准夏普为1作为参考
+                }
+        except Exception:
+            pass
+        return {'name': '业绩基准', 'return_1y': 0, 'max_drawdown': 0, 'sharpe': 0}
+
+    def _get_peer_averages(self, snapshot_id: int, fund_type: str) -> Dict[str, Any]:
+        """获取同类基金平均指标"""
+        try:
+            # 这是一个简单的聚合查询
+            with self.db.get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT 
+                        AVG(return_1y) as avg_return,
+                        AVG(max_drawdown) as avg_dd,
+                        AVG(sharpe) as avg_sharpe
+                    FROM fund_metrics m
+                    JOIN funds f ON m.code = f.code
+                    WHERE m.snapshot_id = ? AND f.fund_type LIKE ?
+                """, (snapshot_id, f"%{fund_type}%"))
+                row = cursor.fetchone()
+                if row and row['avg_return'] is not None:
+                    return {
+                        'return_1y': round(row['avg_return'], 2),
+                        'max_drawdown': round(row['avg_dd'], 2),
+                        'sharpe': round(row['avg_sharpe'], 2)
+                    }
+        except Exception as e:
+            logger.warning(f"获取同类平均失败: {e}")
+        return {'return_1y': 0, 'max_drawdown': 0, 'sharpe': 0}
 
     def query_funds_advanced(self, filters: Dict[str, Any], limit: int = 10) -> Dict[str, Any]:
         """

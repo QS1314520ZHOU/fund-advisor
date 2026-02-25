@@ -8,9 +8,14 @@ import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-from .data_fetcher import get_data_fetcher
-from .calculator import get_calculator
-from ..database import get_db
+try:
+    from services.data_fetcher import get_data_fetcher
+    from services.calculator import get_calculator
+    from database import get_db
+except ImportError:
+    from backend.services.data_fetcher import get_data_fetcher
+    from backend.services.calculator import get_calculator
+    from backend.database import get_db
 
 logger = logging.getLogger(__name__)
 

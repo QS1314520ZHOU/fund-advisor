@@ -4,6 +4,8 @@ import numpy as np
 import logging
 from typing import Dict, Any, List, Optional
 
+from .data_fetcher import get_data_fetcher
+
 logger = logging.getLogger(__name__)
 
 class InvestmentService:
@@ -73,6 +75,139 @@ class InvestmentService:
             }
         except Exception as e:
             logger.error(f"Calculate smart DCA failed: {e}")
+            return {"error": str(e)}
+
+    def simulate_dca(self, nav_df: pd.DataFrame, 
+                     base_amount: float = 1000, 
+                     frequency: str = 'weekly',
+                     start_date: str = None) -> Dict[str, Any]:
+        """
+        定投模拟器：对比固定定投 vs 智能定投
+        
+        Args:
+            nav_df: 净值数据
+            base_amount: 基准定投金额
+            frequency: 频率 ('weekly', 'monthly')
+            start_date: 开始日期 (默认全部)
+        """
+        try:
+            if nav_df is None or len(nav_df) < 20:
+                return {"error": "数据量不足，无法模拟"}
+            
+            df = nav_df.sort_values('date').copy()
+            if start_date:
+                df = df[df['date'] >= pd.to_datetime(start_date)]
+            
+            if len(df) < 10:
+                return {"error": "筛选后数据量不足"}
+            
+            # 计算 MA250 用于智能定投
+            df['ma250'] = df['nav'].rolling(window=250, min_periods=20).mean()
+            
+            # 定义参与定投的日期
+            # 简化逻辑：如果是每周，选周一；如果是每月，选1号（或最近的一个交易日）
+            if frequency == 'weekly':
+                df['is_invest_day'] = df['date'].dt.dayofweek == 0 # 周一
+            else:
+                df['is_invest_day'] = df['date'].dt.is_month_start # 月初
+            
+            # 补丁：如果完全没命中（比如周一都是休市），则改用简单的步长
+            if df['is_invest_day'].sum() < 2:
+                step = 5 if frequency == 'weekly' else 21
+                df['is_invest_day'] = False
+                df.iloc[::step, df.columns.get_loc('is_invest_day')] = True
+            
+            # 变量初始化
+            # 1. 固定定投
+            fixed_total_invested = 0
+            fixed_total_shares = 0
+            # 2. 智能定投
+            smart_total_invested = 0
+            smart_total_shares = 0
+            
+            history = []
+            
+            for i, row in df.iterrows():
+                nav = row['nav']
+                is_day = row['is_invest_day']
+                
+                if is_day:
+                    # A. 固定定投
+                    fixed_total_invested += base_amount
+                    fixed_total_shares += base_amount / nav
+                    
+                    # B. 智能定投 (计算乘数)
+                    deviation = 0
+                    if not pd.isna(row['ma250']):
+                        deviation = (nav - row['ma250']) / row['ma250']
+                    
+                    multiplier = 1.0
+                    if deviation > 0.15: multiplier = 0.6
+                    elif deviation > 0.05: multiplier = 0.8
+                    elif deviation < -0.25: multiplier = 3.0
+                    elif deviation < -0.15: multiplier = 2.0
+                    elif deviation < -0.05: multiplier = 1.5
+                    
+                    smart_amount = base_amount * multiplier
+                    smart_total_invested += smart_amount
+                    smart_total_shares += smart_amount / nav
+                
+                #记录状态（仅记录有定投的日或最后一天，减少前端压力）
+                if is_day or i == len(df) - 1:
+                    fixed_value = fixed_total_shares * nav
+                    smart_value = smart_total_shares * nav
+                    
+                    history.append({
+                        "date": row['date'].strftime('%Y-%m-%d'),
+                        "nav": round(nav, 4),
+                        "fixed_invested": round(fixed_total_invested, 2),
+                        "fixed_value": round(fixed_value, 2),
+                        "smart_invested": round(smart_total_invested, 2),
+                        "smart_value": round(smart_value, 2)
+                    })
+            
+            # 最终结果
+            final_nav = df.iloc[-1]['nav']
+            fixed_final_value = fixed_total_shares * final_nav
+            smart_final_value = smart_total_shares * final_nav
+            
+            # 计算收益率
+            fixed_roi = (fixed_final_value / fixed_total_invested - 1) * 100 if fixed_total_invested > 0 else 0
+            smart_roi = (smart_final_value / smart_total_invested - 1) * 100 if smart_total_invested > 0 else 0
+            
+            return {
+                "summary": {
+                    "start_date": df.iloc[0]['date'].strftime('%Y-%m-%d'),
+                    "end_date": df.iloc[-1]['date'].strftime('%Y-%m-%d'),
+                    "frequency": frequency,
+                    "fixed": {
+                        "total_invested": round(fixed_total_invested, 2),
+                        "final_value": round(fixed_final_value, 2),
+                        "profit": round(fixed_final_value - fixed_total_invested, 2),
+                        "roi": round(fixed_roi, 2)
+                    },
+                    "smart": {
+                        "total_invested": round(smart_total_invested, 2),
+                        "final_value": round(smart_final_value, 2),
+                        "profit": round(smart_final_value - smart_total_invested, 2),
+                        "roi": round(smart_roi, 2)
+                    },
+                    "alpha": round(smart_roi - fixed_roi, 2)
+                },
+                "history": history
+            }
+        except Exception as e:
+            logger.error(f"DCA simulation failed: {e}")
+            return {"error": str(e)}
+
+    async def get_smart_dca_suggestion(self, code: str) -> Dict[str, Any]:
+        """封装方法：获取基金定投建议（供 API 直接调用）"""
+        try:
+            fetcher = get_data_fetcher()
+            nav_df = fetcher.get_fund_nav(code)
+            return self.calculate_smart_dca(nav_df)
+        except Exception as e:
+            logger.error(f"Failed to get smart dca suggestion for {code}: {e}")
             return {"error": str(e)}
 
 _investment_service = None

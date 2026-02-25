@@ -8,8 +8,12 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 import statistics
 
-from ..database import get_db
-from .ai_service import get_ai_service
+try:
+    from database import get_db
+    from services.ai_service import get_ai_service
+except ImportError:
+    from backend.database import get_db
+    from backend.services.ai_service import get_ai_service
 
 logger = logging.getLogger(__name__)
 

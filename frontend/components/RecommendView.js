@@ -1,7 +1,7 @@
 
 export default {
     name: 'RecommendView',
-    props: ['loading', 'recommendations', 'recTab', 'predictions', 'marketNews', 'compareList', 'renderMarkdown', 'getSentimentText', 'getScoreClass'],
+    props: ['loading', 'recommendations', 'actions', 'loadingActions', 'recTab', 'predictions', 'marketNews', 'compareList', 'renderMarkdown', 'getSentimentText', 'getScoreClass'],
     emits: ['update:recTab', 'analyze-fund', 'toggle-compare', 'search-query'],
     computed: {
         currentList() {
@@ -11,6 +11,8 @@ export default {
     },
     template: `
         <div v-if="recommendations || loading">
+            <daily-actions-card :actions="actions" :loading="loadingActions" @analyze-fund="$emit('analyze-fund', $event)"></daily-actions-card>
+
             <div style="display: grid; grid-template-columns: 240px 1fr; gap: 1.5rem; margin-bottom: 2rem; align-items: start;">
                 <!-- Left Module: Market Sentiment -->
                 <div class="glass-card" style="display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 1.5rem;">
@@ -71,7 +73,7 @@ export default {
 
                         <!-- 3. Advice Grid -->
                         <div class="advice-grid">
-                            <div class="advice-card" :class="{active: recTab === 'top10'}" style="--card-color: #FF6B6B" @click="$emit('update:recTab', 'top10')">
+                            <div class="advice-card" :class="{active: recTab === 'top10'}" style="--card-color: #FF6B6B" @click="handleTabSwitch('top10')">
                                 <div class="advice-header">
                                     <div class="advice-title"><span style="font-size:1.2rem">🏆</span> TOP10 精选</div>
                                     <div v-if="recTab === 'top10'"
@@ -81,7 +83,7 @@ export default {
                                 <div class="advice-desc">综合评分最高的基金，适合作为核心持仓</div>
                                 <div class="advice-arrow">查看详情 →</div>
                             </div>
-                            <div class="advice-card" :class="{active: recTab === 'high_alpha'}" style="--card-color: #4ECDC4" @click="$emit('update:recTab', 'high_alpha')">
+                            <div class="advice-card" :class="{active: recTab === 'high_alpha'}" style="--card-color: #4ECDC4" @click="handleTabSwitch('high_alpha')">
                                 <div class="advice-header">
                                     <div class="advice-title"><span style="font-size:1.2rem">🚀</span> 高 Alpha 进攻</div>
                                     <div v-if="recTab === 'high_alpha'"
@@ -91,7 +93,7 @@ export default {
                                 <div class="advice-desc">超额收益突出，适合进攻型投资者</div>
                                 <div class="advice-arrow">查看详情 →</div>
                             </div>
-                            <div class="advice-card" :class="{active: recTab === 'long_term'}" style="--card-color: #45B7D1" @click="$emit('update:recTab', 'long_term')">
+                            <div class="advice-card" :class="{active: recTab === 'long_term'}" style="--card-color: #45B7D1" @click="handleTabSwitch('long_term')">
                                 <div class="advice-header">
                                     <div class="advice-title"><span style="font-size:1.2rem">⏳</span> 长线持有</div>
                                     <div v-if="recTab === 'long_term'"
@@ -101,7 +103,7 @@ export default {
                                 <div class="advice-desc">夏普比率高且回撤控制好，适合长期配置</div>
                                 <div class="advice-arrow">查看详情 →</div>
                             </div>
-                            <div class="advice-card" :class="{active: recTab === 'low_beta'}" style="--card-color: #96CEB4" @click="$emit('update:recTab', 'low_beta')">
+                            <div class="advice-card" :class="{active: recTab === 'low_beta'}" style="--card-color: #96CEB4" @click="handleTabSwitch('low_beta')">
                                 <div class="advice-header">
                                     <div class="advice-title"><span style="font-size:1.2rem">🛡️</span> 稳健防守</div>
                                     <div v-if="recTab === 'low_beta'"
@@ -117,7 +119,7 @@ export default {
             </div>
 
             <!-- Fund List Results -->
-            <div class="glass-card">
+            <div class="glass-card" id="recommendation-list">
                 <div class="section-header">
                     <h2 class="section-title">📋 推荐列表</h2>
                     <div style="font-size: 0.9rem; color: var(--text-muted);">共筛选出 {{ currentList.length }} 只优质标的</div>
@@ -200,5 +202,16 @@ export default {
         <div v-else style="padding: 2rem; text-align: center; color: var(--text-muted);">
             正在初始化推荐模块...
         </div>
-    `
+    `,
+    methods: {
+        handleTabSwitch(tab) {
+            this.$emit('update:recTab', tab);
+            setTimeout(() => {
+                const el = document.getElementById('recommendation-list');
+                if (el) {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            }, 100);
+        }
+    }
 };

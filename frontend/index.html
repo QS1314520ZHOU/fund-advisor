@@ -27,7 +27,10 @@
 
         <div class="app-container">
             <!-- Sidebar Component -->
-            <sidebar :mode="mode" @switch-mode="switchMode" @show-update-dialog="showUpdateDialog = true"></sidebar>
+            <sidebar :mode="mode" :is-dark="isDark" :notifications="notifications"
+                :show-notifications="showNotifications" @switch-mode="switchMode" @toggle-theme="toggleTheme"
+                @toggle-notifications="showNotifications = !showNotifications" @mark-read="markNotifRead"
+                @show-update-dialog="showUpdateDialog = true"></sidebar>
 
             <!-- Main Content -->
             <main class="main-content">
@@ -40,8 +43,9 @@
                 </div>
 
                 <recommend-view v-if="mode === 'recommend'" :loading="loading" :recommendations="recommendations"
-                    v-model:rec-tab="recTab" :predictions="predictions" :market-news="marketNews"
-                    :compare-list="compareList" :render-markdown="renderMarkdown" :get-sentiment-text="getSentimentText"
+                    :actions="dailyActions" :loading-actions="loadingDailyActions" v-model:rec-tab="recTab"
+                    :predictions="predictions" :market-news="marketNews" :compare-list="compareList"
+                    :render-markdown="renderMarkdown" :get-sentiment-text="getSentimentText"
                     :get-score-class="getScoreClass" @analyze-fund="analyzeFundByCode" @toggle-compare="toggleCompare"
                     @search-query="window.appSearch($event)"></recommend-view>
 
@@ -80,8 +84,16 @@
                 <macro-view v-if="mode === 'macro'" :macro-data="macroData"
                     @fetch-macro-data="fetchMacroData"></macro-view>
 
+                <dca-management v-if="mode === 'dca'" :plans="dcaPlans" :loading="loadingDca"
+                    @update-plan-status="updateDcaStatus" @analyze-fund="analyzeFundByCode"
+                    @switch-mode="switchMode"></dca-management>
+
+                <history-view v-if="mode === 'history'" :history="recommendationHistory" :loading="loadingHistory"
+                    @fetch-history="fetchHistory" @analyze-fund="analyzeFundByCode"></history-view>
+
                 <tools-view v-if="mode === 'tools'" :fee-calculator="feeCalculator"
-                    @calculate-fee="calculateFee"></tools-view>
+                    :portfolio-builder="portfolioBuilder" @calculate-fee="calculateFee"
+                    @build-portfolio="buildPortfolio" @analyze-fund="analyzeFundByCode"></tools-view>
             </main>
         </div>
 

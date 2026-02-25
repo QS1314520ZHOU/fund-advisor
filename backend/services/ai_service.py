@@ -11,15 +11,13 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
 try:
-    from ..config import get_settings
-    # from .vector_service import get_vector_service
-    from ..utils.cache import get_cache_manager
-except (ImportError, ValueError):
-    # Fallback for direct script execution or different import paths
     from config import get_settings
-    # from services.vector_service import get_vector_service
     from utils.cache import get_cache_manager
-from ..database import get_db
+    from database import get_db
+except (ImportError, ValueError):
+    from backend.config import get_settings
+    from backend.utils.cache import get_cache_manager
+    from backend.database import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +203,7 @@ class AIService:
                                 {"role": "user", "content": user_prompt}
                             ],
                             "max_tokens": max_tokens,
-                            "temperature": 0.3
+                            "temperature": 0.2
                         }
                     )
                     

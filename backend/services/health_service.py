@@ -22,26 +22,35 @@ class HealthService:
             indicators = []
             
             # 1. 盈利能力 (Annual Return)
+            # metrics['annual_return'] 为百分比 (如 15.32 表示 15.32%)
             annual_ret = metrics.get('annual_return', 0)
-            ret_status = 'green' if annual_ret > 0.15 else ('yellow' if annual_ret > 0.05 else 'red')
+            # 兼容性处理：如果 annual_ret < 1 且不为 0，可能被误传为小数
+            if 0 < abs(annual_ret) < 1: annual_ret *= 100
+            
+            ret_status = 'green' if annual_ret > 15 else ('yellow' if annual_ret > 5 else 'red')
             indicators.append({
                 'name': '盈利能力',
                 'status': ret_status,
-                'value': f"{annual_ret*100:.2f}%",
-                'desc': '基于历史年化收益率评估'
+                'value': f"{annual_ret:.2f}%",
+                'desc': f'历史年化收益率为 {annual_ret:.2f}%'
             })
             
             # 2. 风险控制 (Max Drawdown)
+            # metrics['max_drawdown'] 为正数百分比 (如 15.32 表示 15.32% 回撤)
             mdd = abs(metrics.get('max_drawdown', 0))
-            mdd_status = 'green' if mdd < 0.15 else ('yellow' if mdd < 0.25 else 'red')
+            # 兼容性处理：如果 mdd < 1 且不为 0，可能被误传为小数
+            if 0 < mdd < 1: mdd *= 100
+            
+            mdd_status = 'green' if mdd < 15 else ('yellow' if mdd < 25 else 'red')
             indicators.append({
                 'name': '回撤控制',
                 'status': mdd_status,
-                'value': f"{mdd*100:.2f}%",
+                'value': f"{mdd:.2f}%",
                 'desc': '最大回撤水平，越小越稳健'
             })
             
             # 3. 效率比率 (Sharpe Ratio)
+            # sharpe 是比率数值 (如 1.25)
             sharpe = metrics.get('sharpe', 0)
             sharpe_status = 'green' if sharpe > 1.2 else ('yellow' if sharpe > 0.8 else 'red')
             indicators.append({
@@ -52,12 +61,16 @@ class HealthService:
             })
             
             # 4. 超额收益 (Alpha)
+            # alpha 为百分比 (如 5.4 表示 5.4%)
             alpha = metrics.get('alpha', 0)
-            alpha_status = 'green' if alpha > 0.05 else ('yellow' if alpha > 0 else 'red')
+            # 兼容性处理：如果 alpha < 1 且不为 0，可能被误传为小数
+            if 0 < abs(alpha) < 1: alpha *= 100
+            
+            alpha_status = 'green' if alpha > 5 else ('yellow' if alpha > 0 else 'red')
             indicators.append({
                 'name': '超额能力',
                 'status': alpha_status,
-                'value': f"{alpha*100:.2f}%",
+                'value': f"{alpha:.2f}%",
                 'desc': 'Alpha 超额收益能力'
             })
 

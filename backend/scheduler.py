@@ -37,6 +37,30 @@ def daily_update_job():
         logger.error(f"每日更新失败: {message}")
 
 
+def dca_check_job():
+    """每日定投执行核查任务 (建议在收盘后运行)"""
+    try:
+        from .services.dca_service import get_dca_service
+        service = get_dca_service()
+        count = service.check_and_execute_plans()
+        if count > 0:
+            logger.info(f"DCA check job completed: {count} plans executed.")
+    except Exception as e:
+        logger.error(f"DCA check job failed: {e}")
+
+
+async def daily_risk_check_job():
+    """每日持仓风险核查任务"""
+    try:
+        from .services.action_service import get_action_service
+        service = get_action_service()
+        count = await service.perform_risk_inspection()
+        if count > 0:
+            logger.info(f"Risk check completed: {count} alerts generated.")
+    except Exception as e:
+        logger.error(f"Risk check job failed: {e}")
+
+
 def init_scheduler():
     """初始化调度器"""
     # 使用间隔触发器 (每小时检查一次)
@@ -50,8 +74,26 @@ def init_scheduler():
         replace_existing=True
     )
     
+    # 添加每日定投核查 (每天 15:30 以后执行)
+    scheduler.add_job(
+        dca_check_job,
+        CronTrigger(hour=15, minute=35),
+        id="dca_check_job",
+        name="每日定投执行核查",
+        replace_existing=True
+    )
+    
+    # 添加每日风险核查 (每天 15:40)
+    scheduler.add_job(
+        daily_risk_check_job,
+        CronTrigger(hour=15, minute=40),
+        id="daily_risk_check_job",
+        name="每日持仓风险核查",
+        replace_existing=True
+    )
+    
     scheduler.start()
-    logger.info("调度器已启动: 每60分钟检测一次自动同步条件")
+    logger.info("调度器已启动: 每60分钟检测一次自动同步条件，15:35 执行定投核查，15:40 执行风险核查")
 
 
 def nightly_sync_check():

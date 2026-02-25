@@ -15,9 +15,9 @@ class StyleService:
     def __init__(self):
         self.fetcher = get_data_fetcher()
         self.indices = {
-            'Large-Cap (CSI 300)': 'sh000300',
-            'Mid-Cap (CSI 500)': 'sh000905',
-            'Small-Cap (CSI 1000)': 'sh000852'
+            'Large-Cap (CSI 300)': '000300',
+            'Mid-Cap (CSI 500)': '000905',
+            'Small-Cap (CSI 1000)': '000852'
         }
         
     def analyze_style(self, code: str, fund_nav: pd.DataFrame) -> Dict[str, Any]:
@@ -35,11 +35,12 @@ class StyleService:
             results = {}
             for name, symbol in self.indices.items():
                 try:
-                    # 使用 get_benchmark_data 的底层逻辑或直接调用 akshare
-                    idx_df = ak.stock_zh_index_daily(symbol=symbol)
-                    idx_df['date'] = pd.to_datetime(idx_df['date'])
-                    idx_df = idx_df.sort_values('date')
-                    idx_df['idx_ret'] = idx_df['close'].pct_change()
+                    # 使用统一的 get_benchmark_data 接口
+                    idx_df = self.fetcher.get_benchmark_data(symbol=symbol)
+                    if idx_df is None or idx_df.empty:
+                        continue
+                        
+                    idx_df['idx_ret'] = idx_df['benchmark_return']
                     
                     # 合并数据
                     merged = pd.merge(fund_nav[['date', 'ret']], idx_df[['date', 'idx_ret']], on='date', how='inner').dropna()

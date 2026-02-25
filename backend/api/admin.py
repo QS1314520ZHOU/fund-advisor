@@ -8,17 +8,17 @@ from fastapi import APIRouter, Header, HTTPException, BackgroundTasks, Query
 from typing import Optional
 
 try:
-    from ..config import get_settings
-    from ..services.snapshot import get_snapshot_service
-    from ..services.ai_service import get_ai_service
-    from ..database import get_db
-    from .responses import ApiResponse, success_response, error_response
-except (ImportError, ValueError):
     from config import get_settings
     from services.snapshot import get_snapshot_service
     from services.ai_service import get_ai_service
     from database import get_db
     from api.responses import ApiResponse, success_response, error_response
+except (ImportError, ValueError):
+    from backend.config import get_settings
+    from backend.services.snapshot import get_snapshot_service
+    from backend.services.ai_service import get_ai_service
+    from backend.database import get_db
+    from backend.api.responses import ApiResponse, success_response, error_response
 
 router = APIRouter(prefix="/admin")
 

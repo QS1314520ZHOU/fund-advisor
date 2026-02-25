@@ -271,6 +271,79 @@ class Database:
             )
         """)
         
+        # 定投计划表 (新增 Phase 7)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS dca_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fund_code TEXT NOT NULL,
+                fund_name TEXT,
+                user_id TEXT DEFAULT 'default',
+                base_amount REAL NOT NULL,
+                frequency TEXT DEFAULT 'weekly',
+                day_of_week INTEGER, -- 0-6 (周一至周日)
+                day_of_month INTEGER, -- 1-31
+                is_active INTEGER DEFAULT 1,
+                last_executed_at TEXT,
+                next_scheduled_at TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(fund_code, user_id)
+            )
+        """)
+        
+        # 定投执行记录表 (新增 Phase 7)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS dca_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER,
+                fund_code TEXT NOT NULL,
+                fund_name TEXT,
+                amount REAL NOT NULL,
+                nav REAL,
+                shares REAL,
+                execute_date TEXT DEFAULT CURRENT_TIMESTAMP,
+                status TEXT DEFAULT 'success',
+                FOREIGN KEY (plan_id) REFERENCES dca_plans(id)
+            )
+        """)
+        
+        # 风险提醒/通知表 (新增 Phase 7)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL, -- risk, info, system
+                title TEXT,
+                content TEXT,
+                fund_code TEXT,
+                is_read INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # 每日操作建议表 (新增 Phase 7)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS daily_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action_date TEXT NOT NULL,
+                fund_code TEXT NOT NULL,
+                fund_name TEXT,
+                action_type TEXT NOT NULL, -- buy, hold, sell
+                reason TEXT,
+                amount REAL, -- 建议金额
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(action_date, fund_code, action_type)
+            )
+        """)
+        
+        # 用户风险偏好表 (新增 Phase 7)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_profile (
+                user_id TEXT PRIMARY KEY DEFAULT 'default',
+                risk_level TEXT DEFAULT 'moderate', -- conservative, moderate, aggressive
+                budget REAL DEFAULT 10000,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
         # 创建索引
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_metrics_snapshot ON fund_metrics(snapshot_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_metrics_code ON fund_metrics(code)")
@@ -441,6 +514,17 @@ class Database:
             """)
             row = cursor.fetchone()
             return dict(row) if row else None
+
+    def get_successful_snapshots(self, limit: int = 10) -> List[Dict]:
+        """获取最近成功的快照列表"""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM snapshots 
+                WHERE status = 'success'
+                ORDER BY completed_at DESC 
+                LIMIT ?
+            """, (limit,))
+            return [dict(row) for row in cursor.fetchall()]
     
     def get_running_snapshot(self) -> Optional[Dict]:
         """获取正在运行的快照"""
@@ -979,6 +1063,131 @@ class Database:
                             item[field] = []
                 results.append(item)
             return results
+
+    # ==================== Phase 7: 新增业务模块 ====================
+    
+    # 1. 每日操作 (Daily Actions)
+    def save_daily_actions(self, action_date: str, actions: List[Dict]):
+        """保存当日操作建议（全量覆盖）"""
+        with self.get_cursor() as cursor:
+            # 先清除当天旧数据
+            cursor.execute("DELETE FROM daily_actions WHERE action_date = ?", (action_date,))
+            for a in actions:
+                cursor.execute("""
+                    INSERT INTO daily_actions (action_date, fund_code, fund_name, action_type, reason, amount)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (action_date, a['code'], a['name'], a['action'], a['reason'], a.get('amount')))
+                
+    def get_daily_actions(self, action_date: str) -> List[Dict]:
+        """获取当日操作建议"""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM daily_actions WHERE action_date = ?
+            """, (action_date,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    # 2. 用户偏好 (User Profile)
+    def get_user_profile(self, user_id: str = 'default') -> Dict:
+        """获取用户偏好，若不存在则返回默认值"""
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT * FROM user_profile WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            if row: return dict(row)
+            return {'user_id': user_id, 'risk_level': 'moderate', 'budget': 10000}
+            
+    def save_user_profile(self, risk_level: str, budget: float, user_id: str = 'default'):
+        """保存用户偏好"""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT OR REPLACE INTO user_profile (user_id, risk_level, budget, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            """, (user_id, risk_level, budget))
+            
+    # 3. 通知与风险提醒 (Notifications)
+    def add_notification(self, type: str, title: str, content: str, fund_code: str = None):
+        with self.get_cursor() as cursor:
+             cursor.execute("""
+                 INSERT INTO notifications (type, title, content, fund_code)
+                 VALUES (?, ?, ?, ?)
+             """, (type, title, content, fund_code))
+             
+    def get_unread_notifications(self) -> List[Dict]:
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT * FROM notifications WHERE is_read = 0 ORDER BY created_at DESC")
+            return [dict(row) for row in cursor.fetchall()]
+            
+    def mark_notification_read(self, notif_id: int):
+        with self.get_cursor() as cursor:
+            cursor.execute("UPDATE notifications SET is_read = 1 WHERE id = ?", (notif_id,))
+            
+    # 4. 持仓获取模块 (用于一键汇总和盈亏计算)
+    def get_holding_portfolio(self, user_id: str = 'default') -> List[Dict]:
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT p.*, f.name 
+                FROM portfolio p
+                LEFT JOIN funds f ON p.fund_code = f.code
+                WHERE p.user_id = ? AND p.status = 'holding'
+            """, (user_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    # 5. 定投计划 (DCA Plans)
+    def add_dca_plan(self, fund_code: str, fund_name: str, base_amount: float,
+                     frequency: str = 'weekly', day_of_week: int = None,
+                     day_of_month: int = None, user_id: str = 'default') -> bool:
+        """添加或更新定投计划"""
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO dca_plans 
+                    (fund_code, fund_name, user_id, base_amount, frequency, day_of_week, day_of_month, is_active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                """, (fund_code, fund_name, user_id, base_amount, frequency, day_of_week, day_of_month))
+            return True
+        except Exception as e:
+            logger.error(f"添加定投计划失败: {e}")
+            return False
+
+    def get_dca_plans(self, user_id: str = 'default', only_active: bool = True) -> List[Dict]:
+        """获取定投计划列表"""
+        query = "SELECT * FROM dca_plans WHERE user_id = ?"
+        if only_active:
+            query += " AND is_active = 1"
+        with self.get_cursor() as cursor:
+            cursor.execute(query, (user_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def update_dca_status(self, plan_id: int, is_active: bool):
+        """启用/禁用定投计划"""
+        with self.get_cursor() as cursor:
+            cursor.execute("UPDATE dca_plans SET is_active = ? WHERE id = ?", (1 if is_active else 0, plan_id))
+
+    def save_dca_record(self, plan_id: int, fund_code: str, fund_name: str, 
+                        amount: float, nav: float = None, shares: float = None) -> bool:
+        """记录定投执行结果"""
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO dca_records (plan_id, fund_code, fund_name, amount, nav, shares, execute_date)
+                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """, (plan_id, fund_code, fund_name, amount, nav, shares))
+                
+                # 同时更新计划的最后执行时间
+                cursor.execute("UPDATE dca_plans SET last_executed_at = CURRENT_TIMESTAMP WHERE id = ?", (plan_id,))
+            return True
+        except Exception as e:
+            logger.error(f"保存定投记录失败: {e}")
+            return False
+
+    def get_dca_records(self, plan_id: int = None, limit: int = 50) -> List[Dict]:
+        """获取定投执行历史"""
+        with self.get_cursor() as cursor:
+            if plan_id:
+                cursor.execute("SELECT * FROM dca_records WHERE plan_id = ? ORDER BY execute_date DESC LIMIT ?", (plan_id, limit))
+            else:
+                cursor.execute("SELECT * FROM dca_records ORDER BY execute_date DESC LIMIT ?", (limit,))
+            return [dict(row) for row in cursor.fetchall()]
+
 
 
 # 全局实例

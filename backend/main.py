@@ -205,7 +205,7 @@ app = FastAPI(
 # CORS 配置
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS if settings.CORS_ORIGINS else ["http://localhost:8000", "http://127.0.0.1:8000"],
+    allow_origins=["*"], # 简化为允许所有，解决本地多端口访问问题
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -221,6 +221,22 @@ from fastapi.staticfiles import StaticFiles
 
 app.include_router(query.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
+
+# 挂载静态文件
+# 1. 挂载前端资源 (js, css, components)
+frontend_dir = BASE_DIR / "frontend"
+if frontend_dir.exists():
+    app.mount("/js", StaticFiles(directory=str(frontend_dir / "js")), name="js")
+    app.mount("/css", StaticFiles(directory=str(frontend_dir / "css")), name="css")
+    app.mount("/components", StaticFiles(directory=str(frontend_dir / "components")), name="components")
+    logger.info(f"📁 已挂载前端静态目录: {frontend_dir}")
+
+# 2. 挂载数据存储目录 (用于头像、缩略图等)
+storage_dir = backend_dir / "data" / "storage"
+if not storage_dir.exists():
+    storage_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/static/storage", StaticFiles(directory=str(storage_dir)), name="storage")
+logger.info(f"📁 已挂载存储目录: {storage_dir}")
 
 
 

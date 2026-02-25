@@ -8,7 +8,10 @@ from datetime import datetime, date
 from typing import Dict, Optional, List
 import logging
 
-from ..config import get_settings
+try:
+    from config import get_settings
+except ImportError:
+    from backend.config import get_settings
 
 logger = logging.getLogger(__name__)
 

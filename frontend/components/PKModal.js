@@ -59,6 +59,17 @@ export default {
                             {{ f.max_drawdown ? f.max_drawdown.toFixed(2) + '%' : '-' }}
                         </div>
 
+                        <!-- Expansion: Benchmarks -->
+                        <div class="pk-cell pk-header-cell" style="background: rgba(255,255,255,0.03);">业绩基准 (HS300)</div>
+                        <div v-for="f in compareData.data" :key="f.code" class="pk-cell" style="background: rgba(255,255,255,0.03); font-size: 0.8rem; color: var(--text-muted);">
+                            {{ compareData.benchmark?.return_1y }}% / {{ compareData.benchmark?.max_drawdown }}%
+                        </div>
+
+                        <div class="pk-cell pk-header-cell" style="background: rgba(99,102,241,0.03);">同类平均</div>
+                        <div v-for="f in compareData.data" :key="f.code" class="pk-cell" style="background: rgba(99,102,241,0.03); font-size: 0.8rem; color: var(--primary);">
+                             {{ f.peer_avg?.return_1y }}% / {{ f.peer_avg?.max_drawdown }}%
+                        </div>
+
                         <div class="pk-cell pk-header-cell">基金经理</div>
                         <div v-for="f in compareData.data" :key="f.code" class="pk-cell" style="font-size: 0.9rem;">
                             {{ f.manager_info?.name || '未知' }}
@@ -69,8 +80,9 @@ export default {
                         style="margin-top: 2rem; padding: 1.5rem; background: rgba(99, 102, 241, 0.1); border-radius: 16px;">
                         <div style="font-weight: 700; margin-bottom: 0.5rem;">🤖 AI 深度对比建议</div>
                         <div style="font-size: 0.9rem; line-height: 1.6; color: var(--text-main);">
-                            基于多维数据分析，基金 <strong>{{ compareData.data[0].name }}</strong> 表现出更强的防御属性，适合当前震荡行情。
-                            <strong>{{ compareData.data[1].name }}</strong> 在反弹行情中弹性更大。建议根据个人风险承受能力进行分配。
+                            对比显示，<strong>{{ compareData.data[0].name }}</strong> 在近 1 年的表现{{ compareData.data[0].return_1y > compareData.data[1].return_1y ? '优于' : '略逊于' }} <strong>{{ compareData.data[1].name }}</strong>。
+                            从回撤控制看，{{ compareData.data[0].max_drawdown > compareData.data[1].max_drawdown ? compareData.data[1].name : compareData.data[0].name }} 更加稳健。
+                            与同类平均相比，{{ (compareData.data[0].return_1y > compareData.data[0].peer_avg?.return_1y) ? '两者均具有超额收益能力。' : '当前市场环境下，建议关注回撤控制能力。' }}
                         </div>
                     </div>
                 </div>

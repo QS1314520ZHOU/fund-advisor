@@ -48,7 +48,11 @@ export default {
                                         五维能力透视</div>
                                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
                                         <div v-for="(val, key) in fundDetail.radar_data || defaultRadar" :key="key">
-                                            <div class="radar-label">{{ key }}</div>
+                                            <div class="radar-label help-wrapper">
+                                                {{ key }}
+                                                <span class="help-icon">?</span>
+                                                <knowledge-card :term="getTermKey(key)"></knowledge-card>
+                                            </div>
                                             <div class="radar-value">{{ val }}</div>
                                             <div class="rank-bar-container" style="height: 3px;">
                                                 <div class="rank-bar-fill" :style="{width: val + '%'}"></div>
@@ -151,7 +155,11 @@ export default {
 
                             <!-- Stress Test Card -->
                             <div class="analysis-card">
-                                <div class="card-title">压力测试 (If HS300 -10%)</div>
+                                <div class="card-title help-wrapper" style="font-size: 0.8rem; margin-bottom: 0.4rem;">
+                                    压力测试 (If HS300 -10%)
+                                    <span class="help-icon">?</span>
+                                    <knowledge-card term="beta"></knowledge-card>
+                                </div>
                                 <div class="stress-value text-down">
                                     -{{ (fundDetail.metrics?.beta * 10 || 1.25 * 10).toFixed(1) }}%
                                 </div>
@@ -255,7 +263,7 @@ export default {
                                                     {{ rank.rank }}
                                                     <div class="rank-bar-container">
                                                         <div class="rank-bar-fill"
-                                                            :style="{width: `${ 100 - (parseInt(rank.rank.split('/')[0]) / parseInt(rank.rank.split('/')[1]) * 100 || 50) }% `}">
+                                                            :style="{width: (100 - (parseInt(rank.rank.split('/')[0]) / parseInt(rank.rank.split('/')[1]) * 100 || 50)) + '%'}">
                                                         </div>
                                                     </div>
                                                 </td>
@@ -282,6 +290,11 @@ export default {
                                             <div class="toggle-thumb"></div>
                                         </div>
                                         <span style="font-weight: 700;">开启“时光机”模拟定投</span>
+                                        <button v-if="showDca" class="pro-btn" 
+                                            style="margin-left: auto; padding: 4px 12px; font-size: 0.75rem; background: var(--success);"
+                                            @click.stop="$emit('create-dca-plan', fundDetail.code, fundDetail.name)">
+                                            🚀 立即开启定投
+                                        </button>
                                     </div>
                                     <div v-if="showDca && dcaResults"
                                         style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; animation: fadeIn 0.4s;">
@@ -319,8 +332,11 @@ export default {
                                 <!-- Cost Revealer -->
                                 <div class="glass-card"
                                     style="margin-top: 1.5rem; border-left: 4px solid var(--accent);">
-                                    <h3 class="section-title" style="font-size: 1.1rem; margin-bottom: 1rem;">
-                                        费率刺客：隐形成本折算</h3>
+                                    <h3 class="section-title help-wrapper" style="font-size: 1.1rem; margin-bottom: 1rem;">
+                                        费率刺客：隐形成本折算
+                                        <span class="help-icon">?</span>
+                                        <knowledge-card term="fees"></knowledge-card>
+                                    </h3>
                                     <div style="display: flex; flex-direction: column; gap: 1rem;">
                                         <div style="font-size: 0.85rem; color: var(--text-muted);">
                                             管理费+托管费+销售服务费：<span style="color: var(--accent); font-weight: 700;">{{
@@ -348,6 +364,26 @@ export default {
                                                 都被费率吃掉了。建议关注 <span style="color: var(--primary);">ETF/C类</span>
                                                 基金。
                                             </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Transaction Guide -->
+                                <div class="glass-card" style="margin-top: 1.5rem; border-left: 4px solid var(--success);">
+                                    <h3 class="section-title" style="font-size: 1.1rem; margin-bottom: 1rem;">
+                                        🛒 交易实务指引</h3>
+                                    <div style="display: flex; flex-direction: column; gap: 0.8rem; font-size: 0.85rem;">
+                                        <div style="display: flex; gap: 0.8rem; align-items: flex-start;">
+                                            <div style="background: rgba(16, 185, 129, 0.1); padding: 4px 8px; border-radius: 4px; color: var(--success); font-weight: 700;">渠道</div>
+                                            <div style="line-height: 1.6;">推荐通过 <span style="color: var(--white);">天天基金、蛋卷基金</span> 或 <span style="color: var(--white);">支付宝</span> 购买，申购费率通常 1 折（约 0.1% - 0.15%）。</div>
+                                        </div>
+                                        <div style="display: flex; gap: 0.8rem; align-items: flex-start;">
+                                            <div style="background: rgba(16, 185, 129, 0.1); padding: 4px 8px; border-radius: 4px; color: var(--success); font-weight: 700;">申购</div>
+                                            <div style="line-height: 1.6;">T 日 15:00 前申购，T+1 确认份额并开始盈利。</div>
+                                        </div>
+                                        <div style="display: flex; gap: 0.8rem; align-items: flex-start;">
+                                            <div style="background: rgba(244, 63, 94, 0.1); padding: 4px 8px; border-radius: 4px; color: #f43f5e; font-weight: 700;">赎回</div>
+                                            <div style="line-height: 1.6;">赎回资金通常在 T+2 至 T+4 个工作日到帐。</div>
                                         </div>
                                     </div>
                                 </div>
@@ -489,5 +525,20 @@ export default {
                 </div>
             </div>
         </transition>
-    `
+    `,
+    methods: {
+        getTermKey(label) {
+            const map = {
+                '收益历': 'alpha',
+                '抗跌力': 'max_drawdown',
+                '性价比': 'sharpe',
+                '波动率': 'volatility',
+                '贝塔': 'beta',
+                '阿尔法': 'alpha',
+                '夏普比率': 'sharpe',
+                '最大回撤': 'max_drawdown'
+            };
+            return map[label] || 'alpha';
+        }
+    }
 };

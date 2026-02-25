@@ -67,6 +67,23 @@ export default {
                             </div>
                         </div>
                     </div>
+                    <div v-if="pos.profit < 0" class="recovery-box">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                            <span style="font-size: 0.8rem; font-weight: 700; color: #f43f5e;">🩹 回本预测</span>
+                            <span style="font-size: 0.75rem; color: var(--text-muted);">距回本还需涨 <span style="color: white; font-weight: 700;">{{ (Math.abs(pos.profit / (pos.shares * pos.current_nav)) * 100).toFixed(1) }}%</span></span>
+                        </div>
+                        <div class="recovery-timeline">
+                            <div class="timeline-step">
+                                <div class="step-label">保守预期 (4%年化)</div>
+                                <div class="step-value">{{ getRecoveryDays(pos, 0.04) }} 天</div>
+                            </div>
+                            <div class="timeline-step">
+                                <div class="step-label">乐观预期 (10%年化)</div>
+                                <div class="step-value">{{ getRecoveryDays(pos, 0.10) }} 天</div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div style="display: flex; justify-content: flex-end; margin-top: 1rem;">
                         <button class="pro-btn"
                             style="padding: 0.4rem 0.8rem; font-size: 0.75rem; background: rgba(244, 63, 94, 0.1); color: #f43f5e;"
@@ -192,5 +209,17 @@ export default {
                 </div>
             </div>
         </div>
-    `
+    `,
+    methods: {
+        getRecoveryDays(pos, annualReturn) {
+            if (!pos.profit || pos.profit >= 0) return 0;
+            const cost = pos.shares * pos.cost_price;
+            const current = pos.shares * pos.current_nav;
+            if (current <= 0) return 999;
+
+            const dailyReturn = annualReturn / 250;
+            const days = Math.log(cost / current) / Math.log(1 + dailyReturn);
+            return Math.ceil(days);
+        }
+    }
 };
