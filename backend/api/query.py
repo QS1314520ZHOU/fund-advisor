@@ -12,25 +12,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 try:
-    from ..services.snapshot import get_snapshot_service
-    from ..services.ai_service import get_ai_service
-    # from ..services.vector_service import get_vector_service
-    from ..services.data_fetcher import get_data_fetcher
-    from ..services.news_service import get_news_service
-    # from ..services.prediction_service import get_trend_predictor
-    from ..services.backtest_service import get_backtest_service
-    from ..services.macro_service import get_macro_service
-    from ..services.sector_service import get_sector_service
-    # from ..services.watchlist_service import get_watchlist_service
-    from ..database import get_db
-    from ..services.fee_service import get_fee_service
-    from ..services.health_service import get_health_service
-    from ..services.style_service import get_style_service
-    from ..services.investment_service import get_investment_service
-    from ..services.calendar_service import get_calendar_service
-    from ..services.money_flow_service import get_money_flow_service
-    from .responses import ApiResponse, success_response, error_response
-except (ImportError, ValueError):
     from services.snapshot import get_snapshot_service
     from services.ai_service import get_ai_service
     # from services.vector_service import get_vector_service
@@ -48,7 +29,29 @@ except (ImportError, ValueError):
     from services.investment_service import get_investment_service
     from services.calendar_service import get_calendar_service
     from services.money_flow_service import get_money_flow_service
+    from services.portfolio_service import get_portfolio_service
+    from services.roi_review_service import get_roi_service
+    from services.dividend_service import get_dividend_service
     from api.responses import ApiResponse, success_response, error_response
+except (ImportError, ValueError):
+    from backend.services.snapshot import get_snapshot_service
+    from backend.services.ai_service import get_ai_service
+    from backend.services.data_fetcher import get_data_fetcher
+    from backend.services.news_service import get_news_service
+    from backend.services.backtest_service import get_backtest_service
+    from backend.services.macro_service import get_macro_service
+    from backend.services.sector_service import get_sector_service
+    from backend.database import get_db
+    from backend.services.fee_service import get_fee_service
+    from backend.services.health_service import get_health_service
+    from backend.services.style_service import get_style_service
+    from backend.services.investment_service import get_investment_service
+    from backend.services.calendar_service import get_calendar_service
+    from backend.services.money_flow_service import get_money_flow_service
+    from backend.services.portfolio_service import get_portfolio_service
+    from backend.services.roi_review_service import get_roi_service
+    from backend.services.dividend_service import get_dividend_service
+    from backend.api.responses import ApiResponse, success_response, error_response
 import logging
 import time
 import datetime
@@ -257,35 +260,35 @@ async def search_funds(q: str, limit: int = 10):
         except Exception as online_err:
             logger.warning(f"在线名称搜索失败: {online_err}")
 
-            # 4. 后处理：为搜索结果注入评分并二次排序
-            try:
-                # 获取结果中所有基金的评分
-                codes = [r['code'] for r in results]
-                snapshot = db.get_latest_snapshot()
-                if snapshot:
-                    # 批量获取本地数据库中的指标（含评分）
-                    db_funds = db.get_funds_by_codes(snapshot['id'], codes)
-                    score_map = {f['code']: f.get('score', 0) for f in db_funds}
+        # 4. 后处理：为搜索结果注入评分并二次排序
+        try:
+            # 获取结果中所有基金的评分
+            codes = [r['code'] for r in results]
+            snapshot = db.get_latest_snapshot()
+            if snapshot and codes:
+                # 批量获取本地数据库中的指标（含评分）
+                db_funds = db.get_funds_by_codes(snapshot['id'], codes)
+                score_map = {f['code']: f.get('score', 0) for f in db_funds}
+                
+                # 注入评分
+                for r in results:
+                    r['score'] = score_map.get(r['code'], 0)
                     
-                    # 注入评分
-                    for r in results:
-                        r['score'] = score_map.get(r['code'], 0)
-                        
-                    # 二次排序：(匹配权重 * 0.3) + (评分权重 * 0.7)
-                    def sort_key(x):
-                        match_weight = x.get('_rank', 50) 
-                        score_weight = x.get('score', 0)
-                        return match_weight * 0.3 + score_weight * 0.7
-                        
-                    results.sort(key=sort_key, reverse=True)
-            except Exception as e:
-                logger.warning(f"搜索结果评分排序优化失败: {e}")
+                # 二次排序：(匹配权重 * 0.3) + (评分权重 * 0.7)
+                def sort_key(x):
+                    match_weight = x.get('_rank', 50) 
+                    score_weight = x.get('score', 0)
+                    return match_weight * 0.3 + score_weight * 0.7
+                    
+                results.sort(key=sort_key, reverse=True)
+        except Exception as e:
+            logger.warning(f"搜索结果评分排序优化失败: {e}")
 
-            return {
-                'success': True,
-                'results': results[:limit], 
-                'total': len(results)
-            }
+        # 统一使用 success_response 返回，确保前端结构一致
+        return success_response(data={
+            'results': results[:limit], 
+            'total': len(results)
+        })
     except Exception as e:
         import traceback
         logger.error(f"搜索接口异常: {e}\n{traceback.format_exc()}")
@@ -436,6 +439,21 @@ async def analyze_fund_v4(code: str):
     except Exception as e:
         logger.error(f"V4 分析异常: {e}")
         return {"error": str(e)}
+
+
+@router.get("/predict_tomorrow")
+async def predict_tomorrow():
+    """预测明日走势 (Dummy)"""
+    return {
+        "success": True, 
+        "data": {
+            "date": "2026-02-26",
+            "results": [
+                {"name": "沪深300", "prediction": "+0.5%", "confidence": "中"},
+                {"name": "创业板指", "prediction": "-0.2%", "confidence": "高"}
+            ]
+        }
+    }
 
 
 @router.get("/fund/{code}")
@@ -745,39 +763,30 @@ async def get_sectors():
 @router.get("/sectors/{sector}/metrics")
 async def get_sector_metrics(sector: str):
     """
-    获取板块指标
+    获取板块指标及情绪分析
     
     Args:
-        sector: 板块名称（科技/消费/医药/新能源/金融/制造/红利）
+        sector: 板块名称
     """
     try:
-        try:
-            from ..services.sector_service import get_sector_service
-        except (ImportError, ValueError):
-            from services.sector_service import get_sector_service
         service = get_sector_service()
-        
         if not service:
-            return {
-                'success': False,
-                'error': '板块服务未初始化'
-            }
+            return {'success': False, 'error': '板块服务未初始化'}
         
+        # 获取基础指标
         result = service.get_sector_metrics(sector)
+        
+        # 获取市场情绪 (Async)
+        try:
+            sentiment = await service.get_sector_sentiment(sector)
+            if result.get('success'):
+                result['sentiment'] = sentiment
+        except Exception as se:
+            logger.warning(f"获取板块情绪失败: {se}")
+            
         return result
     except Exception as e:
-        return {
-            'success': False,
-            'error': str(e)
-        }
-
-
-@router.get("/sectors/{sector}/predict")
-async def predict_sector(sector: str):
-    """
-    预测板块走势
-    """
-    pass
+        return {'success': False, 'error': str(e)}
 
 @router.get("/news/market")
 async def get_market_news():
@@ -814,41 +823,113 @@ async def get_fund_news(code: str):
         }
     except Exception as e:
         return {'success': False, 'error': str(e)}
-async def predict_sector(
-    sector: str,
-    period: str = Query('tomorrow', description="预测周期: tomorrow 或 week")
-):
-    """
-    预测板块走势
-    
-    Args:
-        sector: 板块名称
-        period: 预测周期（tomorrow=明天, week=本周）
-    """
+# /sectors/{sector}/predict 已删除, 逻辑整合至 /metrics
+
+@router.get("/fund/{code}/fees")
+async def get_fund_fees(code: str):
+    """获取基金费率分析"""
     try:
-        # 验证period参数
-        if period not in ['tomorrow', 'week']:
-            return {
-                'success': False,
-                'error': 'period 参数必须是 tomorrow 或 week'
-            }
-        
-        from ..services.sector_service import get_sector_service
-        service = get_sector_service()
-        
-        if not service:
-            return {
-                'success': False,
-                'error': '板块服务未初始化'
-            }
-        
-        result = await service.predict_sector(sector, period)
-        return result
+        service = get_fee_service()
+        return await service.get_fund_fees(code)
     except Exception as e:
-        return {
-            'success': False,
-            'error': str(e)
-        }
+        return {'success': False, 'error': str(e)}
+
+@router.get("/fund/{code}/health")
+async def get_fund_health(code: str):
+    """获取基金健康度诊断"""
+    try:
+        service = get_health_service()
+        return await service.get_fund_health(code)
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+@router.get("/fund/{code}/style")
+async def get_fund_style(code: str):
+    """获取基金投资风格分析"""
+    try:
+        service = get_style_service()
+        return await service.get_fund_style(code)
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+@router.get("/fund/{code}/smart-dca")
+async def get_fund_smart_dca(code: str):
+    """获取基金智能定投建议"""
+    try:
+        service = get_investment_service()
+        return await service.get_smart_dca_suggestion(code)
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+@router.post("/fund/{code}/simulate-dca")
+async def simulate_fund_dca(code: str, params: Dict[str, Any]):
+    """定投模拟分析"""
+    try:
+        service = get_investment_service()
+        fetcher = get_data_fetcher()
+        nav_df = fetcher.get_fund_nav(code)
+        return service.simulate_dca(
+            nav_df, 
+            base_amount=params.get('base_amount', 1000),
+            frequency=params.get('frequency', 'weekly'),
+            start_date=params.get('start_date')
+        )
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+@router.post("/portfolio/performance")
+async def get_portfolio_performance(holdings: List[Dict[str, Any]]):
+    """获取持仓组合性能分析"""
+    try:
+        service = get_portfolio_service()
+        return await service.calculate_portfolio_performance(holdings)
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+@router.get("/recommendations/history")
+async def get_recommendation_history(limit: int = 10):
+    """获取历史推荐回顾"""
+    try:
+        service = get_roi_service()
+        return await service.get_historical_roi(limit=limit)
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+@router.get("/market/money-flow")
+async def get_market_money_flow():
+    """获取市场大额资金流向"""
+    try:
+        service = get_money_flow_service()
+        return service.get_big_money_flows()
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+@router.get("/fund/{code}/dividends")
+async def get_fund_dividends(code: str):
+    """获取基金分红信息"""
+    try:
+        service = get_dividend_service()
+        return await service.get_fund_dividends(code)
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+@router.get("/calendar")
+async def get_investment_calendar():
+    """获取投资日历"""
+    try:
+        service = get_calendar_service()
+        return await service.get_calendar()
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+@router.get("/money-flow")
+async def get_money_flow():
+    """获取大额资金流向"""
+    try:
+        service = get_money_flow_service()
+        return await service.get_money_flow()
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
 
 
 @router.get("/watchlist")
@@ -1661,6 +1742,33 @@ async def sell_fund(
             'success': False,
             'error': str(e)
         }
+
+
+@router.get("/portfolio/performance")
+async def get_portfolio_performance():
+    """获取所有持仓的实时表现汇总"""
+    try:
+        db = get_db()
+        positions = db.get_portfolio()
+        if not positions:
+            return {"success": True, "summary": {"total_value": 0, "total_profit": 0}, "items": []}
+            
+        # 兼容处理 database 返回的明细转换给 PortfolioService
+        holdings = []
+        for p in positions:
+            holdings.append({
+                "code": p['fund_code'],
+                "name": p['fund_name'],
+                "shares": p['shares'],
+                "cost": p['cost_price']
+            })
+            
+        from ..services.portfolio_service import get_portfolio_service
+        service = get_portfolio_service()
+        return await service.calculate_portfolio_performance(holdings)
+    except Exception as e:
+        logger.error(f"Portfolio performance failed: {e}")
+        return {"success": False, "error": str(e)}
 
 
 # ==================== 推荐历史回溯接口 ====================
@@ -2756,16 +2864,15 @@ async def calculate_fee_api(amount: float, years: int, rate: float):
     try:
         # A = P * (1 - (1-r)^n)
         loss = amount * (1 - (1 - rate/100)**years)
-        return {
-            "success": True,
+        return success_response(data={
             "original_amount": amount,
             "years": years,
             "fee_rate": rate,
             "fee_loss": round(loss, 2),
             "remaining": round(amount - loss, 2)
-        }
+        })
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return error_response(error=str(e))
 
 # ==================== 自选列表接口 ====================
 
@@ -2830,3 +2937,105 @@ async def remove_from_watchlist(req: WatchlistRemoveRequest):
     except Exception as e:
         logger.error(f"Remove watchlist failed: {e}")
         return error_response(error=str(e))
+
+
+# ==================== Phase 7: 用户中心高级工具 ====================
+
+@router.get("/daily-actions")
+async def get_daily_actions(limit: int = 10):
+    """获取每日操作建议清单"""
+    try:
+        from .services.action_service import get_action_service
+        service = get_action_service()
+        return await service.get_daily_actions(limit=limit)
+    except Exception as e:
+        logger.error(f"获取每日操作建议失败: {e}")
+        return {"status": "error", "message": str(e)}
+
+@router.get("/portfolio-builder")
+async def build_portfolio(amount: float = Query(..., gt=0), risk_level: str = 'moderate'):
+    """一键生成建仓方案"""
+    try:
+        from .services.portfolio_builder import get_portfolio_builder
+        service = get_portfolio_builder()
+        return service.build_portfolio(amount, risk_level)
+    except Exception as e:
+        logger.error(f"生成建仓方案失败: {e}")
+        return {"success": False, "error": str(e)}
+
+@router.get("/user/profile")
+async def get_user_profile():
+    """获取用户风险偏好与预算"""
+    try:
+        db = get_db()
+        return {"success": True, "data": db.get_user_profile()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@router.post("/user/profile")
+async def save_user_profile(profile: Dict[str, Any]):
+    """更新用户风险偏好与预算"""
+    try:
+        db = get_db()
+        db.save_user_profile(
+            risk_level=profile.get('risk_level', 'moderate'),
+            budget=profile.get('budget', 10000)
+        )
+        return {"success": True, "message": "设置已保存"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@router.get("/dca/plans")
+async def get_dca_plans():
+    """获取定投计划列表"""
+    try:
+        db = get_db()
+        return {"success": True, "data": db.get_dca_plans()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@router.post("/dca/plans")
+async def add_dca_plan(plan: Dict[str, Any]):
+    """添加或修改定投计划"""
+    try:
+        db = get_db()
+        success = db.add_dca_plan(
+            fund_code=plan['fund_code'],
+            fund_name=plan.get('fund_name'),
+            base_amount=plan['base_amount'],
+            frequency=plan.get('frequency', 'weekly'),
+            day_of_week=plan.get('day_of_week'),
+            day_of_month=plan.get('day_of_month')
+        )
+        return {"success": success}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@router.post("/dca/plans/{plan_id}/status")
+async def update_dca_status(plan_id: int, is_active: bool):
+    """更新定投计划状态 (暂停/启动)"""
+    try:
+        db = get_db()
+        success = db.update_dca_status(plan_id, 1 if is_active else 0)
+        return {"success": success}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@router.get("/notifications")
+async def get_notifications():
+    """获取未读通知"""
+    try:
+        db = get_db()
+        return {"success": True, "data": db.get_unread_notifications()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@router.post("/notifications/{notif_id}/read")
+async def mark_notification_read(notif_id: int):
+    """标记通知为已读"""
+    try:
+        db = get_db()
+        db.mark_notification_read(notif_id)
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}

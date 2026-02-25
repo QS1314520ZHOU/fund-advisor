@@ -1,4 +1,4 @@
-import Sidebar from '../components/Sidebar.js';
+﻿import Sidebar from '../components/Sidebar.js';
 import RecommendView from '../components/RecommendView.js';
 import ChannelView from '../components/ChannelView.js';
 import GainersView from '../components/GainersView.js';
@@ -7,6 +7,10 @@ import PortfolioView from '../components/PortfolioView.js';
 import WatchlistView from '../components/WatchlistView.js';
 import MacroView from '../components/MacroView.js';
 import ToolsView from '../components/ToolsView.js';
+import DailyActionsCard from '../components/DailyActionsCard.js';
+import DcaManagement from '../components/DcaManagement.js';
+import HistoryView from '../components/HistoryView.js';
+import KnowledgeCard from '../components/KnowledgeCard.js';
 import SectorModal from '../components/SectorModal.js';
 import FundDetailModal from '../components/FundDetailModal.js';
 import PKModal from '../components/PKModal.js';
@@ -23,7 +27,9 @@ import {
 
 const { createApp, ref, computed, onMounted } = Vue;
 
-// ... (rest of the code) ...
+// 基础配置
+const API_BASE = '/api/v1';
+const STORAGE_BASE = '/static/storage';
 
 createApp({
     components: {
@@ -36,6 +42,10 @@ createApp({
         WatchlistView,
         MacroView,
         ToolsView,
+        DailyActionsCard,
+        DcaManagement,
+        HistoryView,
+        KnowledgeCard,
         SectorModal,
         FundDetailModal,
         PKModal,
@@ -47,17 +57,20 @@ createApp({
         const mode = ref('recommend');
         const loading = ref(false);
         const errorMsg = ref('');
+        const isDark = ref(localStorage.getItem('theme') !== 'light');
 
         // 推荐页
         const recommendations = ref(null);
         const recommendAiSummary = ref('');
+        const dailyActions = ref(null);
+        const loadingDailyActions = ref(false);
         const predictions = ref([]); // New for V4
         const recTab = ref('top10');
         const recTabs = [
             { key: 'top10', label: '🏆 TOP10' },
-            { key: 'high_alpha', label: '📈 高Alpha' },
-            { key: 'long_term', label: '💎 长线' },
-            { key: 'short_term', label: '⚡ 短线' },
+            { key: 'high_alpha', label: '🚀 高Alpha' },
+            { key: 'long_term', label: '⏳ 长线' },
+            { key: 'short_term', label: '🎯 短线' },
             { key: 'low_beta', label: '🛡️ 防守' }
         ];
 
@@ -69,10 +82,10 @@ createApp({
         const fundDetail = ref(null);
         const fullFundList = ref([]); // Store static list for local filter
         const scannerTags = [
-            { icon: '🦸', label: '抗跌英雄', query: '近1年回撤小于5%且收益为正' },
+            { icon: '🛡️', label: '抗跌英雄', query: '近1年回撤小于5%且收益为正' },
             { icon: '🏆', label: '高性价比', query: '夏普比率大于1.5' },
-            { icon: '🚀', label: '进攻尖兵', query: '近1年收益大于20%的科技或新能源' },
-            { icon: '🛡️', label: '稳健红利', query: '低风险且分红高的价值基金' }
+            { icon: '🚀', label: '进攻尖兵', query: '近1年收益大于30%的科技或新能源' },
+            { icon: '💎', label: '稳健红利', query: '低风险且分红高的价值基金' }
         ];
         let searchTimer = null;
 
@@ -86,11 +99,11 @@ createApp({
             { value: '1w', label: '1周' },
             { value: '1m', label: '1月' },
             { value: '3m', label: '3月' },
-            { value: '6m', label: '6月' }, // Added
-            { value: '1y', label: '1年' }, // Added
-            { value: '2y', label: '2年' }, // Added
-            { value: '3y', label: '3年' }, // Added
-            { value: '5y', label: '5年' }  // Added
+            { value: '6m', label: '6月' },
+            { value: '1y', label: '1年' },
+            { value: '2y', label: '2年' },
+            { value: '3y', label: '3年' },
+            { value: '5y', label: '5年' }
         ];
 
         // 持仓
@@ -107,7 +120,9 @@ createApp({
 
         // V4 Edge States
         const showRadar = ref(false);
-        const defaultRadar = { '收益力': 75, '抗跌力': 82, '性价比': 68, '经理能力': 85, '公司实力': 90 };
+        const defaultRadar = {
+            '收益力': 75, '抗跌力': 82, '性价比': 68, '经理能力': 85, '公司实力': 90
+        };
         const showDca = ref(false);
         const dcaResults = ref(null);
 
@@ -128,9 +143,17 @@ createApp({
         const showChat = ref(false);
         const chatInput = ref('');
         const chatMessages = ref([
-            { role: 'ai', content: '您好！我是您的 AI 私人管家。您可以直接告诉我您的投资偏好，我会为您在全球范围筛选最合适的基金。' }
+            { role: 'ai', content: '您好！我是您的 AI 私人管家。您可以直接告诉我您的投资偏好，我会为您在全量基金中筛选最合适的组合。' }
         ]);
         const chatLoading = ref(false);
+
+        // Phase 7: History
+        const recommendationHistory = ref({});
+        const loadingHistory = ref(false);
+
+        // Phase 7: Notifications
+        const notifications = ref([]);
+        const showNotifications = ref(false);
 
         const feeCalculator = ref({
             amount: 100000,
@@ -139,6 +162,43 @@ createApp({
             result: null,
             loading: false
         });
+
+        const portfolioBuilder = ref({
+            amount: 10000,
+            risk_level: 'moderate',
+            result: null,
+            loading: false
+        });
+
+        const dcaPlans = ref([]);
+        const loadingDca = ref(false);
+
+        const createDcaPlan = async (code, name) => {
+            // Default: Weekly, Monday, 1000 RMB
+            try {
+                const res = await fetch(`${API_BASE}/dca/plans`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        fund_code: code,
+                        fund_name: name,
+                        frequency: 'weekly',
+                        day_of_week: 1, // Tuesday by default for some buffer
+                        base_amount: 1000
+                    })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showError('✅ 定投计划创建成功！可在“智能定投”页管理。');
+                    // Refresh plans if we are in dca mode
+                    if (mode.value === 'dca') {
+                        const res2 = await fetch(`${API_BASE}/dca/plans`);
+                        const data2 = await res2.json();
+                        if (data2.success) dcaPlans.value = data2.data;
+                    }
+                } else showError(data.error || '鍒涘缓澶辫触');
+            } catch (e) { showError('杩炴帴鏈嶅姟澶辫触'); }
+        };
 
         const showFilterDrawer = ref(false);
         const activeFilters = ref({
@@ -163,7 +223,7 @@ createApp({
                 if (compareList.value.length < 3) {
                     compareList.value.push(fund);
                 } else {
-                    showError('最多支持3只基金进行PK');
+                    showError('最多支持 3 只基金进行 PK');
                 }
             }
         }
@@ -174,13 +234,13 @@ createApp({
             showPk.value = true;
             compareData.value = null;
             try {
-                const res = await fetch(`${API_BASE}/v1/compare`, {
+                const res = await fetch(`${API_BASE}/compare`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ codes: compareList.value.map(f => f.code) })
                 });
                 const data = await res.json();
-                if (data.status === 'success') {
+                if (data.success) {
                     compareData.value = data;
                 }
             } catch (e) {
@@ -278,12 +338,26 @@ createApp({
             setTimeout(() => { errorMsg.value = ''; }, 3000);
         }
 
+        const toggleTheme = () => {
+            isDark.value = !isDark.value;
+            localStorage.setItem('theme', isDark.value ? 'dark' : 'light');
+            applyTheme();
+        };
+
+        const applyTheme = () => {
+            if (isDark.value) {
+                document.body.classList.remove('light-mode');
+            } else {
+                document.body.classList.add('light-mode');
+            }
+        };
+
 
 
         // New Helpers for V4
         const getSentimentText = (val) => {
-            if (val < 20) return '极度恐慌';
-            if (val < 40) return '恐慌';
+            if (val < 20) return '极度恐惧';
+            if (val < 40) return '恐惧';
             if (val < 60) return '中性';
             if (val < 80) return '贪婪';
             return '极度贪婪';
@@ -298,10 +372,9 @@ createApp({
         const dynamicGreeting = computed(() => {
             const sentiment = recommendations.value?.market_sentiment || 50;
             if (sentiment < 30) return "☕ 市场波动较大，建议喝茶读书，减少盯盘。";
-            if (sentiment > 70) return "⚖️ 市场情绪过热，请警惕风险，切勿盲目追高。";
+            if (sentiment > 70) return "⚠️ 市场情绪过热，请警惕风险，切勿盲目追高。";
             return "👋 欢迎回来，今天也为您挑选了最值得关注的机会。";
         });
-
         function renderAIContent(text) {
             if (!text) return '';
             try {
@@ -321,7 +394,6 @@ createApp({
         function renderMarkdown(text) {
             if (!text) return '';
             try {
-                // ... (custom markdown rendering logic) ...
                 let html = typeof marked !== 'undefined' ? marked.parse(text) : text.replace(/\n/g, '<br>');
                 // 1. Semantic Tagging
                 const sections = [
@@ -340,7 +412,7 @@ createApp({
                 // Standard headers
                 html = html
                     .replace(/^### (.*$)/gim, '|MARKER|$1|🚀|')
-                    .replace(/^## (.*$)/gim, '|MARKER|$1|🌎|');
+                    .replace(/^## (.*$)/gim, '|MARKER|$1|🌐|');
 
                 // 2. Split and Wrap into Cards
                 if (html.includes('|MARKER|')) {
@@ -348,7 +420,7 @@ createApp({
                     let cards = [];
 
                     for (let i = 0; i < parts.length; i += 3) {
-                        if (!parts[i + 1]) break; // Safety
+                        if (i + 1 >= parts.length) break;
                         const title = parts[i];
                         const icon = parts[i + 1];
                         const content = parts[i + 2] || '';
@@ -359,9 +431,9 @@ createApp({
                         if (title.includes('AI 预判')) cardClass += ' highlight';
 
                         cards.push(`<div class="${cardClass}">
-                                            <div class="strategy-title">${icon} ${title}</div>
-                                            <div class="strategy-content">${content.trim()}</div>
-                                        </div>`);
+                                             <div class="strategy-title">${icon} ${title}</div>
+                                             <div class="strategy-content">${content.trim()}</div>
+                                         </div>`);
                     }
                     html = cards.join('');
                 }
@@ -378,7 +450,7 @@ createApp({
                 const entities = ['半导体', '新能源', '白酒', '人工智能', 'AI', '红利', '医疗', '消费', '科技', '电子', '军工', '地产', '金融', '光伏', '储能', '电池', '量化', '通胀'];
                 entities.forEach(entity => {
                     const reg = new RegExp(`(?<![">])(${entity})(?![^<]*>)`, 'g');
-                    html = html.replace(reg, `<span class="entity-link" onclick="window.appSearch('$1')">🏷️ $1</span>`);
+                    html = html.replace(reg, `<span class="entity-link" onclick="window.appSearch('$1')">🔍 $1</span>`);
                 });
 
                 // 5. Cleanup Line Breaks
@@ -393,7 +465,6 @@ createApp({
                 return text;
             }
         }
-
         function switchMode(newMode) {
             mode.value = newMode;
             if (newMode === 'recommend') fetchRecommendations();
@@ -404,6 +475,8 @@ createApp({
             }
             if (newMode === 'gainers') fetchTopGainers();
             if (newMode === 'portfolio') fetchPortfolio();
+            if (newMode === 'dca') fetchDcaPlans();
+            if (newMode === 'history') fetchHistory();
             if (newMode === 'watchlist') {
                 fetchWatchlist();
                 startWatchlistTimer();
@@ -419,15 +492,15 @@ createApp({
             sectorDetail.value = null;
 
             try {
-                const res = await fetch(`${API_BASE}/v1/sectors/${sectorName}/analyze`);
+                const res = await fetch(`${API_BASE}/sectors/${sectorName}/analyze`);
                 const data = await res.json();
-                if (data.status === 'success') {
+                if (data.success) {
                     sectorDetail.value = data.data;
                 } else {
-                    errorMsg.value = '分析板块失败: ' + (data.message || '未知错误');
+                    errorMsg.value = '鍒嗘瀽鏉垮潡澶辫触: ' + (data.message || '鏈煡閿欒');
                 }
             } catch (e) {
-                errorMsg.value = '无法连接分析服务: ' + e.message;
+                errorMsg.value = '鏃犳硶杩炴帴鍒嗘瀽鏈嶅姟: ' + e.message;
             } finally {
                 loadingSectorDetail.value = false;
             }
@@ -448,9 +521,12 @@ createApp({
             try {
                 const res = await fetch(`${API_BASE}/recommend`);
                 const data = await res.json();
-                recommendations.value = data;
-                recommendAiSummary.value = data.ai_summary || '';
-                // Fetch predictions as well
+                if (data.success) {
+                    recommendations.value = data.data;
+                    recommendAiSummary.value = data.data.ai_summary || '';
+                }
+                // Fetch daily actions and predictions
+                fetchDailyActions();
                 fetchPredictions();
             } catch (e) {
                 showError('获取推荐失败: ' + e.message);
@@ -459,12 +535,27 @@ createApp({
             }
         }
 
+        async function fetchDailyActions() {
+            loadingDailyActions.value = true;
+            try {
+                const res = await fetch(`${API_BASE}/daily-actions`);
+                const data = await res.json();
+                if (data.success) {
+                    dailyActions.value = data.data;
+                }
+            } catch (e) {
+                console.error('Fetch daily actions failed', e);
+            } finally {
+                loadingDailyActions.value = false;
+            }
+        }
+
         async function fetchPredictions() {
             try {
                 const res = await fetch(`${API_BASE}/predict_tomorrow`);
                 const data = await res.json();
                 if (data.success) {
-                    predictions.value = data.results || [];
+                    predictions.value = data.data?.results || [];
                 }
             } catch (e) {
                 console.error('Fetch predictions failed', e);
@@ -584,6 +675,27 @@ createApp({
                 const res = await fetch(`${STORAGE_BASE}/details/${code}.json`);
                 if (res.ok) {
                     const data = await res.json();
+
+                    // Normalize history_nav if it's in [timestamp, value] array format
+                    if (data.history_nav && data.history_nav.length > 0 && Array.isArray(data.history_nav[0])) {
+                        data.history_nav = data.history_nav.map(item => ({
+                            date: new Date(item[0]).toISOString().split('T')[0],
+                            nav: item[1]
+                        }));
+                    }
+
+                    // Normalize metrics if needed
+                    if (data.metrics) {
+                        const m = data.metrics;
+                        // Map fields that UI expects
+                        if (m.latest_nav !== undefined && m.nav === undefined) m.nav = m.latest_nav;
+                        if (m.return_1d !== undefined && m.change_percent === undefined) m.change_percent = m.return_1d;
+                        if (!m.top_holdings) m.top_holdings = data.holdings || data.top_holdings || [];
+
+                        // Fallback manager info
+                        if (!m.manager && data.manager) m.manager = data.manager;
+                    }
+
                     fundDetail.value = data;
                     fundManager.value = data.metrics?.manager || null;
                     fundRanks.value = data.metrics?.ranks || [];
@@ -604,14 +716,16 @@ createApp({
                         metrics: {
                             ...m,
                             nav: m.latest_nav,
-                            change_percent: m.return_1d
+                            change_percent: m.return_1d,
+                            top_holdings: apiData.holdings || apiData.top_holdings || []
                         },
-                        chart_data: apiData.chart_data || [],
-                        history_nav: apiData.chart_data || [],
-                        holdings: apiData.holdings || [],
+                        chart_data: apiData.chart_data || apiData.history_nav || [],
+                        history_nav: apiData.chart_data || apiData.history_nav || [],
+                        holdings: apiData.holdings || apiData.top_holdings || [],
                         events: apiData.events || [],
                         ai_analysis: apiData.ai_analysis || '',
-                        ai_v4_analysis: apiData.ai_v4_analysis || null
+                        ai_v4_analysis: apiData.ai_v4_analysis || null,
+                        manager_ai: apiData.manager_ai || null
                     };
                     fundManager.value = apiData.manager || null;
                     fundRanks.value = apiData.ranks || [];
@@ -634,6 +748,8 @@ createApp({
                 const res = await fetch(`${API_BASE}/analyze/${code}/v4`);
                 const ana = await res.json();
                 if (fundDetail.value && fundDetail.value.code === code) {
+                    // 统一字段名，同时保留 v4_analysis 以兼容 Modal 中的部分引用
+                    fundDetail.value.ai_v4_analysis = ana;
                     fundDetail.value.v4_analysis = ana;
                 }
             } catch (e) {
@@ -725,16 +841,14 @@ createApp({
 
         async function fetchPortfolio() {
             try {
-                const positions = await LocalDB.getAll('portfolio');
-                portfolio.value = positions;
-                // Local Calculation
-                const total_cost = positions.reduce((sum, p) => sum + (p.shares * (p.cost_price || 1)), 0);
-                portfolioSummary.value = {
-                    total_positions: positions.length,
-                    total_cost: total_cost
-                };
+                const res = await fetch(`${API_BASE}/portfolio/performance`);
+                const data = await res.json();
+                if (data.success) {
+                    portfolio.value = data.items || [];
+                    portfolioSummary.value = data.summary || { total_value: 0, total_profit: 0 };
+                }
             } catch (e) {
-                console.error(e);
+                console.error('Fetch portfolio failed', e);
             }
         }
 
@@ -748,31 +862,28 @@ createApp({
             }
 
             try {
-                // For static version, we use 1.0 as cost_price if not available
-                const cost_price = 1.0;
-                await LocalDB.put('portfolio', {
-                    fund_code: code,
-                    fund_name: name,
-                    shares,
-                    cost_price,
-                    buy_date: new Date().toISOString(),
-                    status: 'holding'
-                });
-                showError('✅ 已记入本地持仓');
-                fetchPortfolio();
+                const res = await fetch(`${API_BASE}/portfolio/buy?code=${code}&shares=${shares}`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    showError('✅ 已记入云端持仓');
+                    fetchPortfolio();
+                } else showError(data.error || '买入执行失败');
             } catch (e) {
-                showError('保存失败');
+                showError('连接服务器失败');
             }
         }
 
         async function sellPosition(positionId) {
             if (!confirm('确定要移除此持仓吗？')) return;
             try {
-                await LocalDB.delete('portfolio', positionId);
-                showError('✅ 已从本地移除');
-                fetchPortfolio();
+                const res = await fetch(`${API_BASE}/portfolio/sell?position_id=${positionId}`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    showError('✅ 已从云端移除');
+                    fetchPortfolio();
+                } else showError(data.error || '移除失败');
             } catch (e) {
-                showError('操作失败');
+                showError('连接服务器失败');
             }
         }
 
@@ -884,7 +995,7 @@ createApp({
         async function runDiagnosePro() {
             loadingDiagnosePro.value = true;
             try {
-                const res = await fetch(`${API_BASE}/v1/diagnose/pro`, {
+                const res = await fetch(`${API_BASE}/diagnose/pro`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -892,7 +1003,7 @@ createApp({
                     })
                 });
                 const data = await res.json();
-                if (data.status === 'success') {
+                if (data.success) {
                     diagnoseProData.value = data.data;
                 }
             } catch (e) {
@@ -973,10 +1084,10 @@ createApp({
         async function fetchMarketHotspots() {
             loadingHotspots.value = true;
             try {
-                const res = await fetch(`${API_BASE}/v1/market/hotspots`);
+                const res = await fetch(`${API_BASE}/market/hotspots`);
                 const data = await res.json();
-                if (data.status === 'success') {
-                    marketHotspots.value = data;
+                if (data.success) {
+                    marketHotspots.value = data.data;
                 }
             } catch (e) {
                 console.error('Fetch hotspots failed', e);
@@ -988,9 +1099,9 @@ createApp({
         async function fetchHotSectors() {
             loadingSectors.value = true;
             try {
-                const res = await fetch(`${API_BASE}/v1/sectors/hot`);
+                const res = await fetch(`${API_BASE}/sectors/hot`);
                 const data = await res.json();
-                if (data.status === 'success') {
+                if (data.success) {
                     hotSectors.value = data.data;
                 }
             } catch (e) {
@@ -1012,9 +1123,9 @@ createApp({
                 if (activeFilters.value.scale !== 'all') queryParams.append('min_scale', activeFilters.value.scale);
                 if (activeFilters.value.tenure !== 'all') queryParams.append('min_tenure', activeFilters.value.tenure);
 
-                const res = await fetch(`${API_BASE}/v1/rankings?${queryParams.toString()}`);
+                const res = await fetch(`${API_BASE}/rankings?${queryParams.toString()}`);
                 const data = await res.json();
-                if (data.status === 'success') {
+                if (data.success) {
                     rankingListData.value = data.data;
                 }
             } catch (e) {
@@ -1038,13 +1149,13 @@ createApp({
             chatLoading.value = true;
 
             try {
-                const res = await fetch(`${API_BASE}/v1/ai/chat/query`, {
+                const res = await fetch(`${API_BASE}/ai/chat/query`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ query: query, history: chatMessages.value.slice(-5) })
                 });
                 const data = await res.json();
-                if (data.status === 'success') {
+                if (data.success) {
                     chatMessages.value.push({
                         role: 'ai',
                         content: data.interpretation,
@@ -1056,32 +1167,45 @@ createApp({
                         if (el) el.scrollTop = el.scrollHeight;
                     }, 50);
                 } else {
-                    chatMessages.value.push({ role: 'ai', content: '抱歉，我现在无法解析您的需求，请尝试换一种说法。' });
+                    chatMessages.value.push({
+                        role: 'ai', content: '抱歉，我现在无法解析您的需求，请尝试换一种说法。'
+                    });
                 }
             } catch (e) {
-                chatMessages.value.push({ role: 'ai', content: '连接 AI 服务失败，请稍后重试。' });
+                chatMessages.value.push({
+                    role: 'ai', content: '连接 AI 服务失败，请稍后重试。'
+                });
             } finally {
                 chatLoading.value = false;
             }
         }
 
+        const fetchNotifications = async () => {
+            // Placeholder: can be implemented later
+            console.log('Fetching notifications...');
+        };
+
         const getSectorIcon = (sector) => {
             const icons = {
-                '大消费': '🛒', '白酒': '🍷', '食品饮料': '🍔', '家电': '📺', '美妆': '💄', '旅游酒店': '🏨', '农业养殖': '🐷',
-                '医疗保健': '🏥', '医药': '💊', '生物制品': '🧬', '中药': '🌿', '医疗器械': '🩻',
-                '科技创新': '🚀', '半导体': '💾', '电子': '📱', '人工智能': '🤖', '软件': '💻', '通信': '📡', '云计算': '☁️',
-                '新能源': '⚡', '光伏': '☀️', '锂电池': '🔋', '风电': '🌬️', '电力': '🔌',
-                '金融地产': '🏦', '银行': '🏛️', '非银金融': '💹', '房地产': '🏠', '券商': '📊',
-                '高端制造': '🏭', '工业': '⚙️', '军工': '🛡️', '基建': '🏗️', '汽车': '🚗',
-                '资源能源': '🛢️', '煤炭': '🪵', '有色金属': '💎', '钢铁': '⛓️', '石化': '⛽'
+                '大消费': '🛍️', '白酒': '🍶', '食品饮料': '🍲', '家电': '📺', '美妆': '💄', '旅游酒店': '🏨', '农业养殖': '🐷',
+                '医疗保健': '🏥', '医药': '💊', '生物制品': '🧪', '中药': '🌿', '医疗器械': '🔨',
+                '科技创新': '🚀', '半导体': '📠', '电子': '📱', '人工智能': '🤖', '软件': '💾', '通信': '📡', '云计算': '☁️',
+                '新能源': '🔋', '光伏': '☀️', '锂电池': '🔋', '风电': '🌬️', '电力': '⚡',
+                '金融地产': '🏢', '银行': '🏦', '非银金融': '🪙', '房地产': '🏠', '券商': '📉',
+                '高端制造': '🏗️', '工业': '⚙️', '军工': '🛡️', '基建': '🏗️', '汽车': '🚗',
+                '资源能源': '⛽', '煤炭': '🌑', '有色金属': '⛓️', '钢铁': '🏗️', '石化': '⛽'
             };
-            return icons[sector] || '🏷️';
+            return icons[sector] || '🔍';
         };
 
         // 生命周期
         onMounted(() => {
+            applyTheme();
             fetchRecommendations();
             fetchMarketNews();
+            fetchNotifications();
+            // 每 10 分钟刷新一次通知
+            setInterval(fetchNotifications, 10 * 60 * 1000);
             // 初始化 Lucide 图标
             if (typeof lucide !== 'undefined') {
                 lucide.createIcons();
@@ -1091,7 +1215,7 @@ createApp({
         return {
             renderMarkdown,
             getScoreClass,
-            mode, loading, errorMsg,
+            mode, loading, errorMsg, isDark, toggleTheme,
             recommendations, recTab, recTabs, currentList,
             searchQuery, searchResults, searchLoading, fundDetail,
             topGainers, gainerPeriod, gainerLoading, gainerPeriods,
@@ -1130,20 +1254,59 @@ createApp({
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(portfolioList)
                     });
-                    backtestResult.value = await res.json();
+                    const data = await res.json();
+                    if (data.success) {
+                        backtestResult.value = data.data;
+                    } else showError(data.error || '回测失败');
                 } catch (e) { showError('回测失败'); }
                 finally { backtestLoading.value = false; }
             },
             feeCalculator,
             calculateFee: async () => {
                 feeCalculator.value.loading = true;
+                feeCalculator.value.result = null; // 清除旧结果
+                console.log('开始计算费率:', feeCalculator.value);
+
                 try {
                     const { amount, years, rate } = feeCalculator.value;
-                    const res = await fetch(`${API_BASE}/fee/calculate?amount=${amount}&years=${years}&rate=${rate}`);
+
+                    // 基本验证
+                    if (amount <= 0 || years < 0 || rate < 0) {
+                        showError('请输入有效的试算参数');
+                        return;
+                    }
+
+                    const url = `${API_BASE}/fee/calculate?amount=${amount}&years=${years}&rate=${rate}`;
+                    console.log('请求 URL:', url);
+
+                    const res = await fetch(url);
                     const data = await res.json();
-                    if (data.success) feeCalculator.value.result = data;
-                } catch (e) { showError('计算失败'); }
-                finally { feeCalculator.value.loading = false; }
+
+                    console.log('API 返回结果:', data);
+
+                    if (data.success) {
+                        feeCalculator.value.result = data.data;
+                    } else {
+                        showError(data.error || '计算失败');
+                    }
+                } catch (e) {
+                    console.error('利息试算异常:', e);
+                    showError('连接服务失败，请检查网络');
+                } finally {
+                    feeCalculator.value.loading = false;
+                }
+            },
+            portfolioBuilder,
+            buildPortfolio: async () => {
+                portfolioBuilder.value.loading = true;
+                try {
+                    const { amount, risk_level } = portfolioBuilder.value;
+                    const res = await fetch(`${API_BASE}/portfolio-builder?amount=${amount}&risk_level=${risk_level}`);
+                    const data = await res.json();
+                    if (data.success) portfolioBuilder.value.result = data.data;
+                    else showError(data.error || '生成失败');
+                } catch (e) { showError('连接服务失败'); }
+                finally { portfolioBuilder.value.loading = false; }
             },
             showWiki: (term) => {
                 showError(`📖 ${term}: ${wikiTerms[term] || '暂无详细解释'}`);
@@ -1151,6 +1314,7 @@ createApp({
 
             // V4 additions
             predictions, getSentimentText, getSentimentColor, dynamicGreeting,
+            dailyActions, loadingDailyActions,
             showRadar, defaultRadar, showDca, dcaResults, runDcaSimulation, calculateTotalFee,
             chartPath, crashMarkers,
             compareList, showPk, toggleCompare,
@@ -1168,7 +1332,63 @@ createApp({
             showFilterDrawer, activeFilters, applyFilters,
 
             // Phase 4 Additions
-            showChat, chatInput, chatMessages, chatLoading, sendChatMessage
+            showChat, chatInput, chatMessages, chatLoading, sendChatMessage,
+
+            // Phase 7 Additions
+            dcaPlans, loadingDca,
+            fetchDcaPlans: async () => {
+                loadingDca.value = true;
+                try {
+                    const res = await fetch(`${API_BASE}/dca/plans`);
+                    const data = await res.json();
+                    if (data.success) dcaPlans.value = data.data;
+                } catch (e) { showError('获取定投计划失败'); }
+                finally { loadingDca.value = false; }
+            },
+            updateDcaStatus: async (planId, status) => {
+                try {
+                    const res = await fetch(`${API_BASE}/dca/plans/${planId}/status?is_active=${status ? 1 : 0}`, { method: 'POST' });
+                    const data = await res.json();
+                    if (data.success) {
+                        // Refresh plans
+                        const res2 = await fetch(`${API_BASE}/dca/plans`);
+                        const data2 = await res2.json();
+                        if (data2.success) dcaPlans.value = data2.data;
+                    } else showError(data.error || '更新失败');
+                } catch (e) { showError('连接服务失败'); }
+            },
+            createDcaPlan,
+            recommendationHistory,
+            loadingHistory,
+            fetchHistory: async () => {
+                loadingHistory.value = true;
+                try {
+                    const res = await fetch(`${API_BASE}/recommendation-history?days=30`);
+                    const data = await res.json();
+                    if (data.success) {
+                        recommendationHistory.value = data.data;
+                    }
+                } catch (e) { showError('获取历史失败'); }
+                finally { loadingHistory.value = false; }
+            },
+            notifications,
+            showNotifications,
+            fetchNotifications: async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/notifications`);
+                    const data = await res.json();
+                    if (data.success) notifications.value = data.data;
+                } catch (e) { console.error('Fetch notifications failed', e); }
+            },
+            markNotifRead: async (id) => {
+                try {
+                    const res = await fetch(`${API_BASE}/notifications/${id}/read`, { method: 'POST' });
+                    const data = await res.json();
+                    if (data.success) {
+                        notifications.value = notifications.value.filter(n => n.id !== id);
+                    }
+                } catch (e) { showError('操作失败'); }
+            }
         };
     }
 }).mount('#app');
