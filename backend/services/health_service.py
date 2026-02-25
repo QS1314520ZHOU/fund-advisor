@@ -24,8 +24,6 @@ class HealthService:
             # 1. 盈利能力 (Annual Return)
             # metrics['annual_return'] 为百分比 (如 15.32 表示 15.32%)
             annual_ret = metrics.get('annual_return', 0)
-            # 兼容性处理：如果 annual_ret < 1 且不为 0，可能被误传为小数
-            if 0 < abs(annual_ret) < 1: annual_ret *= 100
             
             ret_status = 'green' if annual_ret > 15 else ('yellow' if annual_ret > 5 else 'red')
             indicators.append({
@@ -38,8 +36,6 @@ class HealthService:
             # 2. 风险控制 (Max Drawdown)
             # metrics['max_drawdown'] 为正数百分比 (如 15.32 表示 15.32% 回撤)
             mdd = abs(metrics.get('max_drawdown', 0))
-            # 兼容性处理：如果 mdd < 1 且不为 0，可能被误传为小数
-            if 0 < mdd < 1: mdd *= 100
             
             mdd_status = 'green' if mdd < 15 else ('yellow' if mdd < 25 else 'red')
             indicators.append({
@@ -63,8 +59,6 @@ class HealthService:
             # 4. 超额收益 (Alpha)
             # alpha 为百分比 (如 5.4 表示 5.4%)
             alpha = metrics.get('alpha', 0)
-            # 兼容性处理：如果 alpha < 1 且不为 0，可能被误传为小数
-            if 0 < abs(alpha) < 1: alpha *= 100
             
             alpha_status = 'green' if alpha > 5 else ('yellow' if alpha > 0 else 'red')
             indicators.append({

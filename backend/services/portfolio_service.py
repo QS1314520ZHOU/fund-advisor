@@ -5,8 +5,10 @@ from datetime import datetime
 
 try:
     from services.data_fetcher import get_data_fetcher
+    from database import get_db
 except ImportError:
     from backend.services.data_fetcher import get_data_fetcher
+    from backend.database import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +43,10 @@ class PortfolioService:
             total_day_gain = 0
             
             for holding in holdings:
-                code = holding['code']
-                cost_price = holding.get('cost', 0)
+                code = holding['code'] if 'code' in holding else holding.get('fund_code')
+                cost_price = holding.get('cost_price', holding.get('cost', 0))
                 shares = holding.get('shares', 0)
-                name = holding.get('name', '')
+                name = holding.get('name', holding.get('fund_name', ''))
                 
                 investment = cost_price * shares
                 total_cost += investment
@@ -110,6 +112,29 @@ class PortfolioService:
             
         except Exception as e:
             logger.error(f"Portfolio performance calculation failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_portfolio_summary(self, user_id: str = 'default') -> Dict[str, Any]:
+        """获取持仓汇总（自动从DB拉取持仓）"""
+        try:
+            db = get_db()
+            holdings = db.get_holding_portfolio(user_id)
+            if not holdings:
+                return {"success": True, "summary": None, "items": []}
+            
+            # 统一字段名映射
+            formatted_holdings = []
+            for h in holdings:
+                formatted_holdings.append({
+                    "code": h['fund_code'],
+                    "name": h['fund_name'],
+                    "cost_price": h['cost_price'],
+                    "shares": h['shares']
+                })
+            
+            return await self.calculate_portfolio_performance(formatted_holdings)
+        except Exception as e:
+            logger.error(f"Failed to get portfolio summary: {e}")
             return {"success": False, "error": str(e)}
 
 _portfolio_service = None

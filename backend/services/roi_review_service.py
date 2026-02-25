@@ -61,15 +61,17 @@ class ROIReviewService:
                     code = fund['code']
                     old_nav = fund['latest_nav']
                     
-                    # 当前价格
-                    val = current_valuations.get(code, {})
-                    curr_nav = val.get('estimation_nav', val.get('nav', 0))
+                    # 获取最新确认净值 (来自 nav_history)
+                    curr_nav = 0
+                    db = get_db()
+                    recent_navs = db.get_nav_history(code, limit=1)
+                    if recent_navs:
+                        curr_nav = recent_navs[0].get('nav', 0)
                     
-                    # 补丁：估值缺失尝试取最近净值
+                    # 补丁：如果 confirmed nav 缺失，回退到今日估值
                     if curr_nav == 0:
-                        nav_df = self.fetcher.get_fund_nav(code)
-                        if nav_df is not None and not nav_df.empty:
-                            curr_nav = nav_df['nav'].iloc[-1]
+                        val = current_valuations.get(code, {})
+                        curr_nav = val.get('nav', val.get('estimation_nav', 0))
                     
                     if curr_nav > 0 and old_nav > 0:
                         roi = (curr_nav / old_nav - 1) * 100

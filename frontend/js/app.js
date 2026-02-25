@@ -196,8 +196,8 @@ createApp({
                         const data2 = await res2.json();
                         if (data2.success) dcaPlans.value = data2.data;
                     }
-                } else showError(data.error || '鍒涘缓澶辫触');
-            } catch (e) { showError('杩炴帴鏈嶅姟澶辫触'); }
+                } else showError(data.error || '创建失败');
+            } catch (e) { showError('连接服务失败'); }
         };
 
         const showFilterDrawer = ref(false);

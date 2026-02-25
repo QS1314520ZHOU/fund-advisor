@@ -3,8 +3,9 @@
 定时任务调度器
 """
 import logging
+import asyncio
 from datetime import datetime
-from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from .config import get_settings
@@ -12,7 +13,7 @@ from .services.snapshot import get_snapshot_service
 
 logger = logging.getLogger(__name__)
 
-scheduler = BackgroundScheduler()
+scheduler = AsyncIOScheduler()
 
 
 def daily_update_job():
@@ -29,7 +30,9 @@ def daily_update_job():
         return
     
     # 执行全量更新
-    success, message, snapshot_id = service.create_full_snapshot()
+    result = service.create_full_snapshot()
+    success = result.get('success', False)
+    message = result.get('message', '')
     
     if success:
         logger.info(f"每日更新成功: {message}")
@@ -130,7 +133,9 @@ def nightly_sync_check():
         # 3. 执行更新
         logger.info("满足自动更新条件，开始执行全量同步...")
         # 0-5点期间执行无过滤同步
-        success, message, _ = service.create_full_snapshot(skip_filter=True)
+        result = service.create_full_snapshot(skip_filter=True)
+        success = result.get('success', False)
+        message = result.get('message', '')
         if success:
             logger.info(f"自动更新完成: {message}")
         else:

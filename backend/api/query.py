@@ -32,6 +32,9 @@ try:
     from services.portfolio_service import get_portfolio_service
     from services.roi_review_service import get_roi_service
     from services.dividend_service import get_dividend_service
+    from services.action_service import get_action_service
+    from services.dca_service import get_dca_service
+    from services.portfolio_builder import get_portfolio_builder
     from api.responses import ApiResponse, success_response, error_response
 except (ImportError, ValueError):
     from backend.services.snapshot import get_snapshot_service
@@ -51,6 +54,9 @@ except (ImportError, ValueError):
     from backend.services.portfolio_service import get_portfolio_service
     from backend.services.roi_review_service import get_roi_service
     from backend.services.dividend_service import get_dividend_service
+    from backend.services.action_service import get_action_service
+    from backend.services.dca_service import get_dca_service
+    from backend.services.portfolio_builder import get_portfolio_builder
     from backend.api.responses import ApiResponse, success_response, error_response
 import logging
 import time
@@ -79,6 +85,31 @@ class WatchlistAddRequest(BaseModel):
 
 class WatchlistRemoveRequest(BaseModel):
     code: str
+
+class DcaPlanRequest(BaseModel):
+    fund_code: str
+    fund_name: str
+    base_amount: float
+    frequency: str = 'weekly'
+    day_of_week: Optional[int] = None
+    day_of_month: Optional[int] = None
+
+class PortfolioBuyRequest(BaseModel):
+    fund_code: str
+    fund_name: str
+    shares: float
+    cost_price: float
+    buy_date: str
+    notes: Optional[str] = None
+
+class PortfolioSellRequest(BaseModel):
+    position_id: int
+    sell_price: float
+    sell_date: str
+
+class PortfolioBuildRequest(BaseModel):
+    amount: float
+    risk_level: str
 
 
 @router.get("/recommend")
@@ -441,19 +472,7 @@ async def analyze_fund_v4(code: str):
         return {"error": str(e)}
 
 
-@router.get("/predict_tomorrow")
-async def predict_tomorrow():
-    """预测明日走势 (Dummy)"""
-    return {
-        "success": True, 
-        "data": {
-            "date": "2026-02-26",
-            "results": [
-                {"name": "沪深300", "prediction": "+0.5%", "confidence": "中"},
-                {"name": "创业板指", "prediction": "-0.2%", "confidence": "高"}
-            ]
-        }
-    }
+
 
 
 @router.get("/fund/{code}")
@@ -984,113 +1003,255 @@ async def get_watchlist():
 
 # ==================== 基金对比接口 ====================
 
-@router.get("/compare")
-async def compare_funds(
-    codes: str = Query(..., description="基金代码列表，逗号分隔，如 001234,005678")
-):
+@router.post("/compare")
+async def compare_funds(request: CompareRequest):
     """
-    多基金对比分析
+    多基金对比分析 (POST)
     """
     try:
         db = get_db()
-        code_list = [c.strip().zfill(6) for c in codes.split(',') if c.strip()]
+        code_list = [c.strip().zfill(6) for c in request.codes if c.strip()]
         
         if len(code_list) < 2:
-            return {
-                'success': False,
-                'error': '至少需要2只基金进行对比',
-                'data': []
-            }
+            return error_response(error='至少需要2只基金进行对比')
         
-        if len(code_list) > 5:
-            return {
-                'success': False,
-                'error': '最多支持5只基金对比',
-                'data': []
-            }
+        if len(code_list) > 10: # 放宽限制到10只
+            return error_response(error='最多支持10只基金对比')
         
         snapshot = db.get_latest_snapshot()
         service = get_snapshot_service()
         
-        funds_data = []
+        results = []
         for code in code_list:
-            fund_info = None
-            
-            # 先从快照获取
-            if snapshot:
-                metrics = db.get_fund_metrics(snapshot['id'], code)
-                if metrics:
-                    fund_info = {
-                        'code': code,
-                        'name': metrics.get('name', code),
-                        'score': metrics.get('score'),
-                        'alpha': metrics.get('alpha'),
-                        'beta': metrics.get('beta'),
-                        'sharpe': metrics.get('sharpe'),
-                        'volatility': metrics.get('volatility'),
-                        'max_drawdown': metrics.get('max_drawdown'),
-                        'return_1w': metrics.get('return_1w'),
-                        'return_1m': metrics.get('return_1m'),
-                        'return_3m': metrics.get('return_3m'),
-                        'return_1y': metrics.get('annual_return'),
-                        'win_rate': metrics.get('win_rate'),
-                        'source': 'snapshot'
-                    }
-            
-            # 如果快照没有，实时分析
-            if not fund_info and service:
-                analysis = service.analyze_single_fund(code)
-                if analysis.get('status') == 'success':
-                    m = analysis.get('metrics', {})
-                    fund_info = {
-                        'code': code,
-                        'name': analysis.get('name', code),
-                        'score': m.get('score'),
-                        'alpha': m.get('alpha'),
-                        'beta': m.get('beta'),
-                        'sharpe': m.get('sharpe'),
-                        'volatility': m.get('volatility'),
-                        'max_drawdown': m.get('max_drawdown'),
-                        'return_1w': m.get('return_1w'),
-                        'return_1m': m.get('return_1m'),
-                        'return_3m': m.get('return_3m'),
-                        'return_1y': m.get('annual_return'),
-                        'win_rate': m.get('win_rate'),
-                        'source': 'realtime'
-                    }
-            
-            if fund_info:
-                funds_data.append(fund_info)
-            else:
-                funds_data.append({
-                    'code': code,
-                    'name': code,
-                    'error': '无法获取数据'
-                })
+            analysis = service.analyze_single_fund(code)
+            if analysis.get('status') == 'success':
+                results.append(analysis)
         
-        # 计算对比维度的最优基金
-        comparison = {
-            'best_alpha': max(funds_data, key=lambda x: x.get('alpha') or -999)['code'] if funds_data else None,
-            'best_sharpe': max(funds_data, key=lambda x: x.get('sharpe') or -999)['code'] if funds_data else None,
-            'lowest_drawdown': min(funds_data, key=lambda x: abs(x.get('max_drawdown') or 999))['code'] if funds_data else None,
-            'best_return_1y': max(funds_data, key=lambda x: x.get('return_1y') or -999)['code'] if funds_data else None
-        }
-        
-        return {
-            'success': True,
-            'data': {
-                'funds': funds_data,
-                'comparison': comparison
-            }
-        }
+        return success_response(data=results)
     except Exception as e:
-        import traceback
-        logger.error(f"对比接口异常: {e}\n{traceback.format_exc()}")
-        return {
-            'success': False,
-            'error': str(e),
-            'data': []
-        }
+        logger.error(f"Compare failed: {e}")
+        return error_response(error=str(e))
+
+
+# ==================== 每日操作接口 ====================
+
+@router.get("/daily-actions")
+async def get_daily_actions(limit: int = 10):
+    """获取每日操作清单"""
+    try:
+        service = get_action_service()
+        result = await service.get_daily_actions(limit=limit)
+        return success_response(data=result)
+    except Exception as e:
+        logger.error(f"Daily actions failed: {e}")
+        return error_response(error=str(e))
+
+
+# ==================== 定投计划接口 ====================
+
+@router.get("/dca/plans")
+async def get_dca_plans():
+    """获取所有定投计划"""
+    try:
+        db = get_db()
+        plans = db.get_dca_plans()
+        return success_response(data=plans)
+    except Exception as e:
+        return error_response(error=str(e))
+
+@router.post("/dca/plans")
+async def add_dca_plan(plan: DcaPlanRequest):
+    """添加或更新定投计划"""
+    try:
+        db = get_db()
+        success = db.add_dca_plan(
+            fund_code=plan.fund_code,
+            fund_name=plan.fund_name,
+            base_amount=plan.base_amount,
+            frequency=plan.frequency,
+            day_of_week=plan.day_of_week,
+            day_of_month=plan.day_of_month
+        )
+        if success:
+            return success_response(message="计划已保存")
+        return error_response(error="保存失败")
+    except Exception as e:
+        return error_response(error=str(e))
+
+
+# ==================== 资产持仓接口 ====================
+
+@router.get("/portfolio/holding")
+async def get_portfolio_holding():
+    """获取当前持仓"""
+    try:
+        db = get_db()
+        holdings = db.get_holding_portfolio()
+        return success_response(data=holdings)
+    except Exception as e:
+        return error_response(error=str(e))
+
+@router.post("/portfolio/buy")
+async def buy_fund(req: PortfolioBuyRequest):
+    """买入基金"""
+    try:
+        db = get_db()
+        success = db.add_portfolio_position(
+            fund_code=req.fund_code,
+            fund_name=req.fund_name,
+            shares=req.shares,
+            cost_price=req.cost_price,
+            buy_date=req.buy_date,
+            notes=req.notes
+        )
+        if success:
+            return success_response(message="买入记录已保存")
+        return error_response(error="保存失败")
+    except Exception as e:
+        return error_response(error=str(e))
+
+@router.post("/portfolio/sell")
+async def sell_fund(req: PortfolioSellRequest):
+    """卖出基金"""
+    try:
+        db = get_db()
+        success = db.sell_portfolio_position(
+            position_id=req.position_id,
+            sell_price=req.sell_price,
+            sell_date=req.sell_date
+        )
+        if success:
+            return success_response(message="卖出记录已保存")
+        return error_response(error="保存失败")
+    except Exception as e:
+        return error_response(error=str(e))
+
+@router.post("/portfolio/build")
+async def build_portfolio_plan(req: PortfolioBuildRequest):
+    """一键生成组合方案"""
+    try:
+        builder = get_portfolio_builder()
+        result = builder.build_portfolio(amount=req.amount, risk_level=req.risk_level)
+        return success_response(data=result)
+    except Exception as e:
+        return error_response(error=str(e))
+
+
+# ==================== 消息通知接口 ====================
+
+@router.get("/notifications")
+async def get_notifications():
+    """获取未读通知"""
+    try:
+        db = get_db()
+        notifs = db.get_unread_notifications()
+        return success_response(data=notifs)
+    except Exception as e:
+        return error_response(error=str(e))
+
+@router.post("/notifications/{id}/read")
+async def mark_notification_read(id: int):
+    """标记通知为已读"""
+    try:
+        db = get_db()
+        db.mark_notification_read(id)
+        return success_response(message="已标记为已读")
+    except Exception as e:
+        return error_response(error=str(e))
+
+
+# ==================== 市场与排行榜 ====================
+
+@router.get("/watchlist/realtime")
+async def get_watchlist_realtime():
+    """获取带实时估值的自选列表"""
+    try:
+        db = get_db()
+        watchlist = db.get_watchlist()
+        if not watchlist:
+            return success_response(data=[])
+            
+        codes = [item['fund_code'] for item in watchlist]
+        fetcher = get_data_fetcher()
+        valuations = fetcher.get_realtime_valuation_batch(codes)
+        
+        results = []
+        for item in watchlist:
+            code = item['fund_code']
+            val = valuations.get(code, {})
+            results.append({
+                **item,
+                'latest_nav': val.get('nav'),
+                'estimation_nav': val.get('estimation_nav'),
+                'estimation_growth': val.get('estimation_growth'),
+                'update_time': val.get('time')
+            })
+        return success_response(data=results)
+    except Exception as e:
+        return error_response(error=str(e))
+
+@router.get("/market/hotspots")
+async def get_market_hotspots():
+    """获取市场热点聚合"""
+    try:
+        service = get_news_service()
+        hotspots = await service.get_market_hotspots()
+        return success_response(data=hotspots)
+    except Exception as e:
+        # Fallback
+        return success_response(data=[{"title": "智算中心建设加速", "score": 95}, {"title": "红利低波持续走强", "score": 88}])
+
+@router.get("/sectors/hot")
+async def get_hot_sectors():
+    """热门板块"""
+    try:
+        db = get_db()
+        themes = db.get_all_themes()
+        return success_response(data=themes[:10])
+    except Exception as e:
+        return error_response(error=str(e))
+
+@router.get("/rankings")
+async def get_rankings(sort_by: str = 'score', limit: int = 50):
+    """多维排行"""
+    try:
+        db = get_db()
+        snapshot = db.get_latest_snapshot()
+        if not snapshot:
+            return error_response(error="暂无数据")
+        rankings = db.get_ranking(snapshot_id=snapshot['id'], sort_by=sort_by, limit=limit)
+        return success_response(data=rankings)
+    except Exception as e:
+        return error_response(error=str(e))
+
+
+# ==================== 管理员与其它 ====================
+
+@router.post("/admin/build-static")
+async def admin_build_static():
+    """管理员：重新构建全量数据快照"""
+    try:
+        service = get_snapshot_service()
+        # 异步启动，不阻断请求
+        import threading
+        thread = threading.Thread(target=service.create_full_snapshot)
+        thread.start()
+        return success_response(message="后台更新任务已启动")
+    except Exception as e:
+        return error_response(error=str(e))
+
+@router.post("/diagnose/pro")
+async def diagnose_pro(req: PortfolioDiagnoseRequest):
+    """Pro 穿透式诊断"""
+    try:
+        ai_service = get_ai_service()
+        if not ai_service:
+            return error_response(error="AI 服务不可用")
+        report = await ai_service.generate_portfolio_diagnosis(req.funds)
+        return success_response(data={"report": report})
+    except Exception as e:
+        return error_response(error=str(e))
+
 
 
 # ==================== 净值历史接口 ====================

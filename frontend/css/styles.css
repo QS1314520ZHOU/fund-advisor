@@ -11,10 +11,12 @@
             /* Theme Variables (Default Dark) */
             --bg-body: #1a1a2e;
             --card-bg: rgba(255, 255, 255, 0.05);
+            --card-hover-bg: rgba(30, 41, 59, 0.8);
             --glass-bg: rgba(255, 255, 255, 0.03);
             --glass-border: linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.05));
             --border-color: rgba(255, 255, 255, 0.1);
             --text-main: #f8fafc;
+            --text-title: #ffffff;
             --text-muted: #94a3b8;
             --bg-dark: #0f172a;
             --bg-gradient: radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
@@ -25,13 +27,16 @@
         }
 
         body.light-mode {
-            --bg-body: #f8fafc;
+            --bg-body: #f1f5f9;
             --card-bg: #ffffff;
+            --card-hover-bg: #f8fafc;
             --glass-bg: rgba(255, 255, 255, 0.9);
             --glass-border: linear-gradient(135deg, rgba(0, 0, 0, 0.05), rgba(0, 0, 0, 0.02));
             --border-color: rgba(0, 0, 0, 0.08);
-            --text-main: #0f172a;
+            --text-main: #1e293b;
+            --text-title: #0f172a;
             --text-muted: #64748b;
+            --bg-dark: #e2e8f0;
             --bg-gradient: radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.05) 0px, transparent 50%),
                 radial-gradient(at 100% 0%, rgba(168, 85, 247, 0.05) 0px, transparent 50%),
                 radial-gradient(at 100% 100%, rgba(244, 63, 94, 0.03) 0px, transparent 50%);
@@ -110,7 +115,7 @@
             font-family: 'Outfit', sans-serif;
             font-size: 1.25rem;
             font-weight: 700;
-            background: linear-gradient(to right, #fff, #94a3b8);
+            background: linear-gradient(to right, var(--text-title), var(--text-muted));
             -webkit-background-clip: text;
             background-clip: text;
             -webkit-text-fill-color: transparent;
@@ -166,7 +171,7 @@
 
         .glass-card:hover {
             border-color: rgba(255, 255, 255, 0.15);
-            background: rgba(30, 41, 59, 0.8);
+            background: var(--card-hover-bg);
         }
 
         .section-header {

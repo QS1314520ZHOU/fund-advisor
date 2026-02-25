@@ -31,75 +31,110 @@ class ActionService:
         获取每日操作清单
         根据最新快照评分结合实时/近期偏离度给出具体操作方案。
         """
-        snapshot = self.db.get_latest_snapshot()
-        if not snapshot:
+        snapshots = self.db.get_successful_snapshots(limit=2)
+        if not snapshots:
             return {"status": "no_data", "message": "暂无快照数据"}
+        
+        snapshot = snapshots[0]
+        prev_snapshot = snapshots[1] if len(snapshots) > 1 else None
+        
+        # 获取上次推荐过的基金（去重最近7天）
+        recent_actions = []
+        for i in range(7):
+            date_str = (datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d')
+            recent_actions.extend([a['fund_code'] for a in self.db.get_daily_actions(date_str)])
+        recent_recommended = set(recent_actions)
 
-        # 获取快照中评分最高的部分基金以及用户自选/持仓
+        # 获取上一个快照的前50名（用于判断“新进入”）
+        prev_top_50 = set()
+        if prev_snapshot:
+            prev_top_50 = {f['code'] for f in self.db.get_ranking(snapshot_id=prev_snapshot['id'], limit=50)}
+
+        # 获取当前快照前50名
         top_funds = self.db.get_ranking(snapshot_id=snapshot['id'], limit=50)
         
         actions = []
         for fund in top_funds:
-            action = self._determine_action(fund)
-            if action:
-                actions.append(action)
+            # 基础过滤：如果是买入建议，检查是否最近7天已推荐
+            action_data = self._determine_action(fund, prev_top_50)
+            if not action_data:
+                continue
+            
+            # 去重：如果最近7天已作为 "buy" 推荐过，跳过（或者改为 hold）
+            if action_data['action'] == 'buy' and action_data['code'] in recent_recommended:
+                action_data['action'] = 'hold'
+                action_data['reason'] = '优质资产，建议继续持有。'
+            
+            actions.append(action_data)
                 
-            if len(actions) >= limit:
-                break
+            if len([a for a in actions if a['action'] == 'buy']) >= limit:
+                # 限制买入推荐数量，但不限制持有建议
+                pass
                 
-        # 分组
+        # 分组并持久化
         buys = [a for a in actions if a['action'] == 'buy']
         holds = [a for a in actions if a['action'] == 'hold']
         sells = [a for a in actions if a['action'] == 'sell']
         
+        # 排序：评分高优先
+        buys.sort(key=lambda x: x['score'], reverse=True)
+        
+        # 保存到数据库（可选，但推荐，这样前端刷新不消失且能去重）
+        all_to_save = (buys[:5] + holds[:5] + sells[:5])
+        self.db.save_daily_actions(snapshot['snapshot_date'], all_to_save)
+        
         return {
             "status": "success",
             "snapshot_date": snapshot['snapshot_date'],
-            "summary": f"今日建议重点关注 {len(buys)} 只买入机会，持有 {len(holds)} 只优质资产。",
+            "summary": f"今日建议重点关注 {len(buys[:5])} 只买入机会，持有 {len(holds[:5])} 只优质资产。",
             "buys": buys[:5],
             "holds": holds[:5],
             "sells": sells[:5]
         }
         
-    def _determine_action(self, fund: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _determine_action(self, fund: Dict[str, Any], prev_top_50: Optional[set] = None) -> Optional[Dict[str, Any]]:
         """基于指标决定操作动作"""
         score = fund.get('score', 0)
-        mdd = fund.get('max_drawdown', 0)
-        # 兼容处理 Mdd 为负数
-        mdd = abs(mdd) if mdd else 0
-        cdd = fund.get('current_drawdown', 0)
-        cdd = abs(cdd) if cdd else 0
+        # cdd 来自快照中的记录 (上一交易日相对于高点的振幅)
+        cdd = abs(fund.get('current_drawdown', 0))
+        # return_1w (本周增长)
+        ret_1w = fund.get('return_1w', 0)
         
         code = fund['code']
         name = fund.get('name', '未知基金')
-        
-        # 使用智能定投服务的均线偏离度逻辑辅助判断（如果有历史数据）
-        # 这里为了快速响应，使用简单的均线预估或者只依赖已有指标
-        # 真实的策略可能会在线获取最新的均线偏离度
         
         action = 'hold'
         reason = '基金表现稳健，建议继续持有观察。'
         level = 'normal'
         
-        # 买入逻辑: 评分高 (>80)，且当前回撤较大 (>10%)，或者夏普极高
-        if score > 80:
-            if cdd > 10:
-                action = 'buy'
-                reason = f'优质资产当前回调了 {cdd:.1f}%，是逢低布局的好机会。'
-                level = 'strong'
-            elif score > 85 and mdd < 15:
-                action = 'buy'
-                reason = '综合实力极强且走势稳健，适合作为底仓买入。'
-                level = 'normal'
+        # 约束1：新进入 TOP 50
+        is_new_top = prev_top_50 is not None and code not in prev_top_50
+        # 约束2：本周显著回调 (>5%) 但评分仍极高
+        is_dip_buy = ret_1w < -5 and score > 80
         
-        # 卖出/减仓逻辑: 评分降低 (<50) 或者回撤极大而没有修复迹象
-        elif score < 50:
+        # 优化后的买入逻辑
+        if score > 80:
+            if is_new_top:
+                action = 'buy'
+                reason = '新晋评分 TOP 50，综合动能正在走强，建议关注。'
+                level = 'normal'
+            elif is_dip_buy:
+                action = 'buy'
+                reason = f'本周深度回调 {abs(ret_1w):.1f}%，虽有波动但基本面依然极佳，适合博弈。'
+                level = 'strong'
+            elif score > 88: # 长期大白马，无条件低位建议
+                action = 'buy'
+                reason = '评分极其卓越的长跑冠军，任何回调都是定投好时点。'
+                level = 'strong'
+                
+        # 卖出/减仓逻辑: 评分降低 (<45) 或者短期回撤太大且分数滑坡
+        elif score < 45:
             action = 'sell'
-            reason = '各项指标显著下降，继续持有风险较高，建议考虑减仓或转换。'
+            reason = '评分已降至及格线以下，趋势转弱，建议先离场观望。'
             level = 'strong'
-        elif cdd > 25 and score < 70:
+        elif cdd > 20 and score < 70:
             action = 'sell'
-            reason = '下跌趋势明显且基本面指标转弱，建议控制仓位。'
+            reason = '近期最大回撤过快，且综合评价同步下滑，建议减仓规避风险。'
             level = 'normal'
             
         return {
