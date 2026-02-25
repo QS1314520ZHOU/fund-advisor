@@ -1,23 +1,22 @@
-# 🤖 基金AI智能推荐系统 (Fund Advisor) v3.0
+# 🤖 基金AI智能推荐系统 (Fund Advisor) v4.0 Edge
 
-基于量化指标和 AI 分析的智能基金推荐平台。系统通过分析历史净值、风险指标，并结合 AI 大模型进行多维度评估，为投资者提供科学的基金选择建议。
+基于量化指标与 AI 深度协议的智能基金投研平台。系统通过分析历史净值、风险指标，并结合 v4.0 结构化 AI 分析协议，为投资者提供极简、专业且具备直观视觉体验的投资参考。
 
 ## 🌟 核心功能
 
-- **自动化数据采集**：集成 AkShare，自动抓取全量基金数据及历史行情。
-- **量化指标评估**：内置多种风控与收益模型（夏普比率、卡玛比率、波动率、回撤管理等）。
-- **AI 智能深度分析**：结合 OpenAI/DeepSeek 等大模型，对入选基金进行深度定性与定量分析。
-- **多维度快照系统**：支持生成每日/每周市场快照，记录市场表现与筛选结果。
-- **现代化 Web 界面**：直观的仪表盘，展示系统状态、入选基金明细及 AI 生成的周报/日报。
-- **自动化调度**：后台自动执行数据更新与分析任务。
+- **v4.0 结构化 AI 分析**：采用全新的结构化分析卡片，涵盖基调总结、业绩归归因、压力测试及经理风格画像。
+- **极简玻璃拟态 UI**：基于现代审美设计的深色模式界面，支持毛玻璃特效（Glassmorphism）与丝滑交互。
+- **定投时光机 (DCA)**：内置历史定投回测引擎，直观展示“穿越”后的投资回报。
+- **费率刺客揭露**：自动折算隐形成本，帮助投资者识别高费率陷阱。
+- **自动化数据体系**：集成 AkShare 实时同步，支持本地静态快照与 API 动态加载的双重保障机制。
+- **量化指标评估**：内置 Alpha、Beta、夏普比率、最大回测等深度量化维度。
 
 ## 🛠️ 技术栈
 
 - **后端**: [FastAPI](https://fastapi.tiangolo.com/) (Python 3.9+)
-- **量化**: [AkShare](https://akshare.xyz/), [Pandas](https://pandas.pydata.org/), [NumPy](https://numpy.org/)
-- **AI**: [OpenAI SDK](https://github.com/openai/openai-python) (兼容多种主流大模型)
-- **调度**: [APScheduler](https://apscheduler.readthedocs.io/)
-- **前端**: 原生 HTML5 / CSS3 / JavaScript (现代化响应式设计)
+- **量化**: [AkShare](https://akshare.xyz/), [Pandas](https://pandas.pydata.org/)
+- **AI**: 兼容 OpenAI/DeepSeek 协议的 v4 结构化解析
+- **前端**: Vue 3 (SFC-free), Lucide Icons, Vanilla CSS (Glassmorphism Design)
 
 ## 🚀 快速开始
 
