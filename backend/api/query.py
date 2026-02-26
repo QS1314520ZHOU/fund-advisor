@@ -3188,3 +3188,658 @@ async def mark_notification_read(notif_id: int):
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# ==================== Feature 1: 用户档案与新手引导 ====================
+
+class OnboardingRequest(BaseModel):
+    experience_level: str  # beginner, intermediate, advanced
+    risk_level: str = 'moderate'
+    budget: float = 10000
+
+@router.get("/user/profile")
+async def get_user_profile(user_id: str = 'default'):
+    """获取用户档案（含新手引导状态）"""
+    try:
+        db = get_db()
+        profile = db.get_user_profile(user_id)
+        return {"success": True, "data": profile}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@router.post("/user/onboarding")
+async def save_onboarding(req: OnboardingRequest):
+    """保存新手引导结果"""
+    try:
+        db = get_db()
+        db.save_user_profile(
+            risk_level=req.risk_level,
+            budget=req.budget,
+            onboarding_complete=1,
+            experience_level=req.experience_level
+        )
+        return {"success": True, "message": "欢迎加入！"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ==================== Feature 2: 聚合仪表盘 ====================
+
+@router.get("/dashboard")
+async def get_dashboard():
+    """聚合仪表盘首页数据"""
+    try:
+        db = get_db()
+        
+        # 1. 持仓汇总
+        positions = db.get_portfolio(status='holding')
+        total_value = 0
+        total_cost = 0
+        today_pnl = 0
+        
+        for pos in positions:
+            nav_history = db.get_nav_history(pos['fund_code'], days=2)
+            current_nav = nav_history[0].get('nav') if nav_history else None
+            prev_nav = nav_history[1].get('nav') if len(nav_history) > 1 else current_nav
+            
+            if current_nav and pos.get('cost_price'):
+                value = pos['shares'] * current_nav
+                cost = pos['shares'] * pos['cost_price']
+                total_value += value
+                total_cost += cost
+                if prev_nav:
+                    today_pnl += pos['shares'] * (current_nav - prev_nav)
+        
+        total_profit = total_value - total_cost
+        profit_rate = (total_profit / total_cost * 100) if total_cost > 0 else 0
+        
+        portfolio_summary = {
+            'total_value': round(total_value, 2),
+            'total_cost': round(total_cost, 2),
+            'total_profit': round(total_profit, 2),
+            'profit_rate': round(profit_rate, 2),
+            'today_pnl': round(today_pnl, 2),
+            'position_count': len(positions)
+        }
+        
+        # 2. 今日操作 (最多3条)
+        try:
+            action_service = get_action_service()
+            daily_actions = await action_service.get_daily_actions(limit=3)
+        except Exception:
+            daily_actions = []
+        
+        # 3. 未读通知数
+        notifs = db.get_unread_notifications()
+        
+        # 4. 市场温度 (简版)
+        market_temp = _calculate_market_temperature(db)
+        
+        return {
+            "success": True,
+            "data": {
+                "portfolio_summary": portfolio_summary,
+                "daily_actions": daily_actions if isinstance(daily_actions, list) else daily_actions.get('actions', []) if isinstance(daily_actions, dict) else [],
+                "unread_notifications": len(notifs),
+                "market_temperature": market_temp
+            }
+        }
+    except Exception as e:
+        logger.error(f"Dashboard failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+def _calculate_market_temperature(db):
+    """计算市场温度 (Feature 11)"""
+    try:
+        snapshot = db.get_latest_snapshot()
+        if not snapshot:
+            return {"temperature": 50, "label": "数据不足", "suggestion": "暂无建议", "color": "#94a3b8"}
+        
+        # 取全部入选基金的指标
+        funds = db.get_recommendations(snapshot['id'], limit=200)
+        if not funds:
+            return {"temperature": 50, "label": "数据不足", "suggestion": "暂无建议", "color": "#94a3b8"}
+        
+        # 1. 平均近期涨幅 (20日 ≈ 1m)
+        returns = [f.get('return_1m', 0) or 0 for f in funds]
+        avg_return = sum(returns) / len(returns) if returns else 0
+        
+        # 2. 上涨基金占比
+        up_ratio = len([r for r in returns if r > 0]) / len(returns) if returns else 0.5
+        
+        # 3. 平均回撤深度
+        drawdowns = [abs(f.get('current_drawdown', 0) or 0) for f in funds]
+        avg_drawdown = sum(drawdowns) / len(drawdowns) if drawdowns else 10
+        
+        # 合成温度：涨幅贡献 40%，上涨比例贡献 30%，回撤反向贡献 30%
+        return_score = min(max((avg_return + 5) / 10 * 100, 0), 100)  # -5%→0, +5%→100
+        up_score = up_ratio * 100
+        drawdown_score = max(100 - avg_drawdown * 5, 0)  # 回撤0%→100, 20%→0
+        
+        temperature = int(return_score * 0.4 + up_score * 0.3 + drawdown_score * 0.3)
+        temperature = max(0, min(100, temperature))
+        
+        if temperature < 30:
+            label = "市场偏冷"
+            suggestion = "市场情绪低迷，适合定投加码、逢低布局"
+            color = "#3b82f6"
+        elif temperature < 50:
+            label = "市场偏凉"
+            suggestion = "市场温和偏弱，可适当关注低估机会"
+            color = "#06b6d4"
+        elif temperature < 70:
+            label = "市场温和"
+            suggestion = "市场情绪适中，维持正常操作即可"
+            color = "#22c55e"
+        elif temperature < 85:
+            label = "市场偏热"
+            suggestion = "市场情绪偏高，注意控制仓位风险"
+            color = "#f59e0b"
+        else:
+            label = "市场过热"
+            suggestion = "市场情绪亢奋，建议减仓锁定利润"
+            color = "#ef4444"
+        
+        return {
+            "temperature": temperature,
+            "label": label,
+            "suggestion": suggestion,
+            "color": color
+        }
+    except Exception as e:
+        logger.warning(f"Market temperature calc failed: {e}")
+        return {"temperature": 50, "label": "计算中...", "suggestion": "请稍后", "color": "#94a3b8"}
+
+
+# ==================== Feature 4: AI 主动消息 ====================
+
+@router.get("/ai/proactive-messages")
+async def get_proactive_messages():
+    """获取 AI 行为教练主动消息"""
+    try:
+        db = get_db()
+        messages = db.get_unread_ai_messages()
+        return {"success": True, "data": messages}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@router.post("/ai/proactive-messages/read")
+async def mark_proactive_read():
+    """标记所有 AI 主动消息为已读"""
+    try:
+        db = get_db()
+        db.mark_ai_messages_read()
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ==================== Feature 5: 回本计算器 ====================
+
+class RecoveryCalcRequest(BaseModel):
+    fund_code: str = ''
+    cost_price: float
+    current_nav: float
+
+@router.post("/tools/recovery-calculator")
+async def recovery_calculator(req: RecoveryCalcRequest):
+    """回本预测计算器 - 三种场景"""
+    try:
+        if req.current_nav <= 0 or req.cost_price <= 0:
+            return {"success": False, "error": "价格必须大于0"}
+        
+        if req.current_nav >= req.cost_price:
+            return {"success": True, "data": {
+                "already_recovered": True,
+                "message": "当前净值已高于成本，无需回本！",
+                "profit_rate": round((req.current_nav / req.cost_price - 1) * 100, 2)
+            }}
+        
+        gap_pct = (req.cost_price / req.current_nav - 1) * 100
+        
+        scenarios = []
+        for name, annual_rate in [("保守 (4%年化)", 0.04), ("中性 (7%年化)", 0.07), ("乐观 (10%年化)", 0.10)]:
+            daily_rate = annual_rate / 250
+            if daily_rate > 0:
+                days = int(
+                    (req.cost_price / req.current_nav - 1) / daily_rate
+                ) if daily_rate > 0 else 9999
+                # More accurate: compound growth
+                import math
+                days_compound = int(math.log(req.cost_price / req.current_nav) / math.log(1 + daily_rate))
+                
+                # Generate curve points (monthly granularity)
+                curve = []
+                nav = req.current_nav
+                for month in range(0, min(days_compound // 21 + 2, 60)):
+                    trading_days = month * 21
+                    projected_nav = req.current_nav * ((1 + daily_rate) ** trading_days)
+                    curve.append({
+                        "month": month,
+                        "nav": round(min(projected_nav, req.cost_price * 1.1), 4)
+                    })
+                    if projected_nav >= req.cost_price:
+                        break
+                
+                scenarios.append({
+                    "name": name,
+                    "annual_rate": annual_rate,
+                    "days": days_compound,
+                    "months": round(days_compound / 21, 1),
+                    "curve": curve
+                })
+        
+        return {
+            "success": True,
+            "data": {
+                "already_recovered": False,
+                "cost_price": req.cost_price,
+                "current_nav": req.current_nav,
+                "gap_pct": round(gap_pct, 2),
+                "scenarios": scenarios
+            }
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ==================== Feature 6: 定投成长图 ====================
+
+@router.get("/dca/plans/{plan_id}/growth")
+async def get_dca_growth(plan_id: int):
+    """获取定投计划的成长数据（累计投入 vs 当前市值）"""
+    try:
+        db = get_db()
+        records = db.get_dca_records(plan_id=plan_id, limit=500)
+        
+        if not records:
+            return {"success": True, "data": {"points": [], "message": "暂无执行记录"}}
+        
+        # 按时间正序
+        records.reverse()
+        
+        cumulative_invested = 0
+        cumulative_shares = 0
+        points = []
+        
+        for rec in records:
+            cumulative_invested += rec.get('amount', 0)
+            cumulative_shares += rec.get('shares', 0) or (rec.get('amount', 0) / rec.get('nav', 1) if rec.get('nav') else 0)
+            current_nav = rec.get('nav', 1)
+            market_value = cumulative_shares * current_nav
+            
+            points.append({
+                "date": rec.get('execute_date', '').split('T')[0] if rec.get('execute_date') else '',
+                "invested": round(cumulative_invested, 2),
+                "market_value": round(market_value, 2),
+                "profit": round(market_value - cumulative_invested, 2)
+            })
+        
+        # Get latest NAV for final market value update
+        if records and records[-1].get('fund_code'):
+            latest_nav = db.get_nav_history(records[-1]['fund_code'], days=1)
+            if latest_nav and latest_nav[0].get('nav'):
+                final_nav = latest_nav[0]['nav']
+                final_value = cumulative_shares * final_nav
+                if points:
+                    points[-1]['market_value'] = round(final_value, 2)
+                    points[-1]['profit'] = round(final_value - cumulative_invested, 2)
+        
+        return {
+            "success": True,
+            "data": {
+                "points": points,
+                "summary": {
+                    "total_invested": round(cumulative_invested, 2),
+                    "total_shares": round(cumulative_shares, 4),
+                    "current_value": points[-1]['market_value'] if points else 0,
+                    "total_profit": points[-1]['profit'] if points else 0,
+                    "profit_rate": round((points[-1]['market_value'] / cumulative_invested - 1) * 100, 2) if points and cumulative_invested > 0 else 0
+                }
+            }
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ==================== Feature 7: 基金替换建议 ====================
+
+@router.get("/fund/{code}/alternatives")
+async def get_fund_alternatives(code: str):
+    """获取同类基金替换建议"""
+    try:
+        db = get_db()
+        code = code.strip().zfill(6)
+        
+        snapshot = db.get_latest_snapshot()
+        if not snapshot:
+            return {"success": False, "error": "暂无快照数据"}
+        
+        # 获取当前基金的指标
+        current = db.get_fund_metrics(snapshot['id'], code)
+        if not current:
+            return {"success": False, "error": f"未找到基金 {code} 的指标"}
+        
+        current_score = current.get('score', 0)
+        current_themes = current.get('themes', [])
+        current_drawdown = abs(current.get('max_drawdown', 0) or 0)
+        
+        # 查找同主题基金
+        candidates = []
+        if current_themes and isinstance(current_themes, list) and current_themes:
+            for theme in current_themes[:2]:
+                theme_funds = db.get_funds_by_theme(snapshot['id'], theme, limit=50)
+                candidates.extend(theme_funds)
+        
+        if not candidates:
+            # Fallback: 取评分最高的基金
+            candidates = db.get_recommendations(snapshot['id'], limit=50)
+        
+        # 过滤：不包含自身，且评分更高或回撤更小
+        alternatives = []
+        seen = set()
+        for f in candidates:
+            f_code = f.get('code')
+            if f_code == code or f_code in seen:
+                continue
+            seen.add(f_code)
+            f_score = f.get('score', 0) or 0
+            f_drawdown = abs(f.get('max_drawdown', 0) or 0)
+            
+            if f_score > current_score or f_drawdown < current_drawdown:
+                alternatives.append({
+                    'code': f_code,
+                    'name': f.get('name', ''),
+                    'score': round(f_score, 1),
+                    'score_diff': round(f_score - current_score, 1),
+                    'return_1y': f.get('return_1y'),
+                    'max_drawdown': f.get('max_drawdown'),
+                    'sharpe': f.get('sharpe'),
+                    'themes': f.get('themes', []),
+                    'annual_return': f.get('annual_return')
+                })
+        
+        # 按评分排序取前2
+        alternatives.sort(key=lambda x: x['score'], reverse=True)
+        alternatives = alternatives[:2]
+        
+        return {
+            "success": True,
+            "data": {
+                "current": {
+                    "code": code,
+                    "name": current.get('name', ''),
+                    "score": round(current_score, 1),
+                    "return_1y": current.get('return_1y'),
+                    "max_drawdown": current.get('max_drawdown'),
+                    "sharpe": current.get('sharpe'),
+                    "themes": current_themes
+                },
+                "alternatives": alternatives,
+                "has_better": len(alternatives) > 0
+            }
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ==================== Feature 8: 月度投资报告 ====================
+
+@router.get("/report/monthly")
+async def get_monthly_report(month: str = None):
+    """生成月度投资体检报告"""
+    try:
+        db = get_db()
+        if not month:
+            from datetime import datetime
+            month = datetime.now().strftime('%Y-%m')
+        
+        # 持仓数据
+        positions = db.get_portfolio(status='holding')
+        total_value = 0
+        total_cost = 0
+        
+        for pos in positions:
+            nav = db.get_nav_history(pos['fund_code'], days=1)
+            current_nav = nav[0].get('nav') if nav else pos.get('cost_price', 0)
+            if current_nav:
+                total_value += pos['shares'] * current_nav
+                total_cost += pos['shares'] * pos['cost_price']
+        
+        monthly_return = round((total_value / total_cost - 1) * 100, 2) if total_cost > 0 else 0
+        
+        # DCA 执行统计
+        dca_records = db.get_dca_records(limit=100)
+        month_dca = [r for r in dca_records if r.get('execute_date', '').startswith(month)]
+        
+        # 行为标签统计
+        tags = db.get_behavior_tags(days=30)
+        
+        # 市场温度
+        market_temp = _calculate_market_temperature(db)
+        
+        report = {
+            "month": month,
+            "portfolio": {
+                "total_value": round(total_value, 2),
+                "total_cost": round(total_cost, 2),
+                "monthly_return": monthly_return,
+                "position_count": len(positions)
+            },
+            "dca": {
+                "execution_count": len(month_dca),
+                "total_invested": round(sum(r.get('amount', 0) for r in month_dca), 2)
+            },
+            "behavior": {
+                "tags": tags[:5],
+                "total_events": sum(t.get('count', 0) for t in tags)
+            },
+            "market_temperature": market_temp,
+            "ai_summary": f"{month} 月度总结：您当前持有 {len(positions)} 只基金，总资产 ¥{round(total_value, 2):,.2f}，本月收益率 {monthly_return}%。{'本月坚持了定投计划，表现出色！' if month_dca else '建议开启定投，让时间帮你理财。'}市场当前{market_temp.get('label', '温和')}，{market_temp.get('suggestion', '维持正常操作')}。"
+        }
+        
+        return {"success": True, "data": report}
+    except Exception as e:
+        logger.error(f"Monthly report failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# ==================== Feature 9: "如果当初" 历史模拟器 ====================
+
+@router.get("/tools/what-if")
+async def what_if_simulator(
+    code: str = Query(..., description="基金代码"),
+    amount: float = Query(10000, description="投入金额"),
+    start_date: str = Query(..., description="开始日期 YYYY-MM-DD")
+):
+    """如果当初买了XX基金，现在值多少"""
+    try:
+        db = get_db()
+        code = code.strip().zfill(6)
+        
+        # 获取历史净值
+        nav_list = db.get_nav_history(code, days=365*3, limit=1000)
+        
+        if not nav_list:
+            # 尝试在线获取
+            fetcher = get_data_fetcher()
+            nav_df = fetcher.get_fund_nav(code)
+            if nav_df is not None and not nav_df.empty:
+                nav_data = []
+                for _, row in nav_df.iterrows():
+                    nav_data.append({
+                        'date': row['date'].strftime('%Y-%m-%d') if hasattr(row['date'], 'strftime') else str(row['date']),
+                        'nav': float(row['nav']) if row['nav'] else None,
+                        'acc_nav': float(row.get('acc_nav', row['nav'])) if row.get('acc_nav') else None
+                    })
+                db.save_nav_history(code, nav_data)
+                nav_list = db.get_nav_history(code, days=365*3, limit=1000)
+        
+        if not nav_list:
+            return {"success": False, "error": "无法获取净值数据"}
+        
+        # 按日期正序排列
+        nav_list.sort(key=lambda x: x.get('date', ''))
+        
+        # 找到起始日期附近的净值
+        start_nav = None
+        start_idx = 0
+        for i, n in enumerate(nav_list):
+            if n.get('date', '') >= start_date:
+                start_nav = n.get('nav')
+                start_idx = i
+                break
+        
+        if not start_nav:
+            return {"success": False, "error": f"在 {start_date} 附近未找到净值数据"}
+        
+        latest_nav = nav_list[-1].get('nav')
+        if not latest_nav:
+            return {"success": False, "error": "无法获取最新净值"}
+        
+        # 计算
+        shares = amount / start_nav
+        current_value = shares * latest_nav
+        profit = current_value - amount
+        profit_rate = (latest_nav / start_nav - 1) * 100
+        
+        # 比较基准：余额宝（3.5%年化简单计算）
+        from datetime import datetime
+        start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+        end_dt = datetime.strptime(nav_list[-1].get('date'), '%Y-%m-%d')
+        years = (end_dt - start_dt).days / 365.0
+        money_market_value = amount * ((1 + 0.02) ** years)  # 2% 年化
+        
+        # 生成走势曲线 (抽样)
+        step = max(1, (len(nav_list) - start_idx) // 50)
+        chart = []
+        for i in range(start_idx, len(nav_list), step):
+            n = nav_list[i]
+            days_elapsed = i - start_idx
+            mm_value = amount * ((1 + 0.02 / 250) ** days_elapsed)
+            chart.append({
+                "date": n.get('date'),
+                "fund_value": round(shares * n.get('nav', start_nav), 2),
+                "money_market": round(mm_value, 2)
+            })
+        # 确保最后一个点
+        if chart and chart[-1]['date'] != nav_list[-1].get('date'):
+            chart.append({
+                "date": nav_list[-1].get('date'),
+                "fund_value": round(current_value, 2),
+                "money_market": round(money_market_value, 2)
+            })
+        
+        # 基金名称
+        fund = db.get_fund(code)
+        fund_name = fund.get('name', code) if fund else code
+        
+        return {
+            "success": True,
+            "data": {
+                "fund_code": code,
+                "fund_name": fund_name,
+                "start_date": start_date,
+                "end_date": nav_list[-1].get('date'),
+                "amount": amount,
+                "start_nav": round(start_nav, 4),
+                "latest_nav": round(latest_nav, 4),
+                "current_value": round(current_value, 2),
+                "profit": round(profit, 2),
+                "profit_rate": round(profit_rate, 2),
+                "holding_days": (end_dt - start_dt).days,
+                "money_market_value": round(money_market_value, 2),
+                "money_market_profit": round(money_market_value - amount, 2),
+                "chart": chart
+            }
+        }
+    except Exception as e:
+        logger.error(f"What-if simulation failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# ==================== Feature 10: 投资者行为画像 ====================
+
+@router.get("/user/behavior-profile")
+async def get_behavior_profile(user_id: str = 'default'):
+    """获取投资者行为画像雷达图数据"""
+    try:
+        db = get_db()
+        tags = db.get_behavior_tags(user_id=user_id, days=180)
+        
+        # 统计各维度
+        tag_counts = {t['tag']: t['count'] for t in tags}
+        total_events = sum(tag_counts.values()) or 1
+        
+        # 5维度计算
+        # 纪律性 = 定投坚持次数 / 总事件
+        discipline = min(tag_counts.get('定投坚持', 0) / max(total_events, 1) * 5, 5)
+        # 抗波动能力 = 1 - 恐慌卖出比例
+        panic_sells = tag_counts.get('恐慌卖出', 0)
+        volatility_tolerance = max(5 - panic_sells * 2, 0)
+        # 分散度 = 根据持仓数量
+        positions = db.get_portfolio(user_id=user_id, status='holding')
+        diversification = min(len(positions) / 3, 5) if positions else 1
+        # 持有耐心 = 根据平均持有天数（简化）
+        patience = min(tag_counts.get('长期持有', 0) + 2, 5)
+        # 学习积极性 = 基于操作多样性
+        learning = min(len(tag_counts) / 2, 5) if tag_counts else 2
+        
+        # 默认值如果没有数据
+        if total_events <= 1:
+            discipline = 3
+            volatility_tolerance = 3
+            diversification = 2
+            patience = 3
+            learning = 2
+        
+        dimensions = [
+            {"name": "纪律性", "value": round(discipline, 1), "max": 5, "description": "执行计划的一致性"},
+            {"name": "抗波动", "value": round(volatility_tolerance, 1), "max": 5, "description": "面对回撤的心理稳定性"},
+            {"name": "分散度", "value": round(diversification, 1), "max": 5, "description": "资产配置的多元化程度"},
+            {"name": "持有耐心", "value": round(patience, 1), "max": 5, "description": "长期持有的能力"},
+            {"name": "学习力", "value": round(learning, 1), "max": 5, "description": "主动学习和适应的能力"}
+        ]
+        
+        # 得分和建议
+        avg_score = sum(d['value'] for d in dimensions) / len(dimensions)
+        
+        if avg_score < 2:
+            profile_type = "新手探索型"
+            advice = "建议先从定投开始，培养投资纪律。"
+        elif avg_score < 3:
+            profile_type = "稳步成长型"
+            advice = "您的投资习惯正在养成，继续保持定投和分散投资。"
+        elif avg_score < 4:
+            profile_type = "经验丰富型"
+            advice = "投资素养不错！可以适当关注更多高阶策略。"
+        else:
+            profile_type = "投资达人型"
+            advice = "您展现了出色的投资纪律和心理素质！"
+        
+        return {
+            "success": True,
+            "data": {
+                "dimensions": dimensions,
+                "avg_score": round(avg_score, 1),
+                "profile_type": profile_type,
+                "advice": advice,
+                "recent_tags": tags[:10]
+            }
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ==================== Feature 11: 市场温度计 ====================
+
+@router.get("/market/temperature")
+async def get_market_temperature():
+    """获取市场温度计"""
+    try:
+        db = get_db()
+        result = _calculate_market_temperature(db)
+        return {"success": True, "data": result}
+    except Exception as e:
+        return {"success": False, "error": str(e)}

@@ -5,7 +5,9 @@ export default {
     emits: ['update-plan-status', 'delete-plan', 'analyze-fund'],
     data() {
         return {
-            showHistory: {}
+            showHistory: {},
+            growthData: {},
+            growthLoading: {}
         };
     },
     template: `
@@ -51,6 +53,9 @@ export default {
                             <button class="action-btn" @click="toggleHistory(plan.id)">
                                 📜 记录
                             </button>
+                            <button class="action-btn" @click="fetchGrowth(plan)" :disabled="growthLoading[plan.id]">
+                                {{ growthLoading[plan.id] ? '☕' : '📈' }} 成长图
+                            </button>
                         </div>
                     </div>
 
@@ -68,6 +73,37 @@ export default {
                             </div>
                         </div>
                     </div>
+
+                    <!-- Growth Chart -->
+                    <div v-if="growthData[plan.id]" class="growth-chart-section" style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,0.05);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                            <div style="font-size: 0.75rem; font-weight: 700; color: var(--primary);">📈 定投成长日记</div>
+                            <div v-if="growthData[plan.id].summary" style="font-size: 0.75rem;">
+                                <span :class="growthData[plan.id].summary.total_profit >= 0 ? 'font-up' : 'font-down'" style="font-weight: 700;">
+                                    {{ growthData[plan.id].summary.total_profit >= 0 ? '+' : '' }}¥{{ growthData[plan.id].summary.total_profit }}
+                                    ({{ growthData[plan.id].summary.profit_rate }}%)
+                                </span>
+                            </div>
+                        </div>
+                        <div v-if="growthData[plan.id].points?.length" style="height: 140px; background: rgba(255,255,255,0.02); border-radius: 12px; padding: 0.5rem;">
+                            <svg :viewBox="'0 0 500 120'" style="width: 100%; height: 100%;" preserveAspectRatio="none">
+                                <!-- Profit/Loss fill area -->
+                                <polygon :points="getGrowthFillPoints(growthData[plan.id].points)" fill="rgba(34,197,94,0.1)" />
+                                <!-- Invested line -->
+                                <polyline :points="getGrowthLine(growthData[plan.id].points, 'invested')" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="1.5" stroke-dasharray="4"/>
+                                <!-- Market value line -->
+                                <polyline :points="getGrowthLine(growthData[plan.id].points, 'market_value')" fill="none" stroke="var(--primary)" stroke-width="2"/>
+                                <!-- Legend -->
+                                <line x1="15" y1="8" x2="35" y2="8" stroke="var(--primary)" stroke-width="2"/>
+                                <text x="38" y="11" fill="rgba(255,255,255,0.5)" font-size="8">市值</text>
+                                <line x1="85" y1="8" x2="105" y2="8" stroke="rgba(255,255,255,0.3)" stroke-width="1.5" stroke-dasharray="4"/>
+                                <text x="108" y="11" fill="rgba(255,255,255,0.5)" font-size="8">投入</text>
+                            </svg>
+                        </div>
+                        <div v-else style="padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">
+                            暂无执行记录，开始定投后将展示成长曲线
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -81,6 +117,57 @@ export default {
         },
         toggleHistory(id) {
             this.showHistory[id] = !this.showHistory[id];
+        },
+        async fetchGrowth(plan) {
+            const id = plan.id;
+            if (this.growthData[id]) {
+                delete this.growthData[id];
+                this.growthData = { ...this.growthData };
+                return;
+            }
+            this.growthLoading[id] = true;
+            this.growthLoading = { ...this.growthLoading };
+            try {
+                const res = await fetch(`/api/v1/dca/plans/${id}/growth`);
+                const data = await res.json();
+                if (data.success) {
+                    this.growthData[id] = data.data;
+                    this.growthData = { ...this.growthData };
+                }
+            } catch (e) { console.error(e); }
+            this.growthLoading[id] = false;
+            this.growthLoading = { ...this.growthLoading };
+        },
+        getGrowthLine(points, key) {
+            if (!points?.length) return '';
+            const vals = points.map(p => p[key] || 0);
+            const allVals = points.flatMap(p => [p.invested || 0, p.market_value || 0]);
+            const min = Math.min(...allVals) * 0.95;
+            const max = Math.max(...allVals) * 1.05;
+            const range = max - min || 1;
+            return points.map((p, i) => {
+                const x = (i / Math.max(points.length - 1, 1)) * 480 + 10;
+                const y = 110 - ((p[key] - min) / range * 95) + 5;
+                return `${x},${y}`;
+            }).join(' ');
+        },
+        getGrowthFillPoints(points) {
+            if (!points?.length) return '';
+            const allVals = points.flatMap(p => [p.invested || 0, p.market_value || 0]);
+            const min = Math.min(...allVals) * 0.95;
+            const max = Math.max(...allVals) * 1.05;
+            const range = max - min || 1;
+            const investedLine = points.map((p, i) => {
+                const x = (i / Math.max(points.length - 1, 1)) * 480 + 10;
+                const y = 110 - ((p.invested - min) / range * 95) + 5;
+                return `${x},${y}`;
+            });
+            const valueLine = points.map((p, i) => {
+                const x = (i / Math.max(points.length - 1, 1)) * 480 + 10;
+                const y = 110 - ((p.market_value - min) / range * 95) + 5;
+                return `${x},${y}`;
+            });
+            return valueLine.join(' ') + ' ' + investedLine.reverse().join(' ');
         }
     },
     style: `

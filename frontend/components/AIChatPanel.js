@@ -3,12 +3,23 @@ export default {
     name: 'AIChatPanel',
     props: ['showChat', 'chatMessages', 'chatInput', 'chatLoading', 'renderMarkdown', 'getScoreClass'],
     emits: ['update:showChat', 'update:chatInput', 'send-message', 'analyze-fund'],
+    data() {
+        return {
+            proactiveMessages: [],
+            hasUnread: false
+        };
+    },
+    watch: {
+        showChat(v) {
+            if (v) this.fetchProactive();
+        }
+    },
     template: `
         <div>
             <!-- Floating AI Toggle -->
             <div class="floating-ai-btn" @click="$emit('update:showChat', !showChat)">
                 <div class="ai-icon-inner">🤖</div>
-                <div class="ai-dot"></div>
+                <div class="ai-dot" :class="{pulse: hasUnread}"></div>
             </div>
 
             <!-- AI Chat Assistant (Phase 4) -->
@@ -25,6 +36,13 @@ export default {
                 </div>
 
                 <div class="chat-messages" id="chatMessages">
+                    <!-- Proactive coach messages -->
+                    <div v-for="pm in proactiveMessages" :key="'pro-'+pm.id" class="message message-ai" style="border-left: 3px solid #a855f7;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                            <span style="font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 4px; background: rgba(168,85,247,0.15); color: #a855f7;">🧑‍🏫 行为教练</span>
+                        </div>
+                        <div v-html="renderMarkdown(pm.content)"></div>
+                    </div>
                     <div v-for="(msg, idx) in chatMessages" :key="idx" class="message" :class="'message-' + msg.role">
                         <div v-html="renderMarkdown(msg.content)"></div>
 
@@ -70,5 +88,26 @@ export default {
                 </div>
             </div>
         </div>
-    `
+    `,
+    methods: {
+        async fetchProactive() {
+            try {
+                const res = await fetch('/api/v1/ai/proactive-messages');
+                const data = await res.json();
+                if (data.success && data.data?.length) {
+                    this.proactiveMessages = data.data;
+                    this.hasUnread = false;
+                    // Mark as read
+                    fetch('/api/v1/ai/proactive-messages/read', { method: 'POST' });
+                }
+            } catch (e) { console.warn('Proactive fetch failed:', e); }
+        }
+    },
+    async mounted() {
+        try {
+            const res = await fetch('/api/v1/ai/proactive-messages');
+            const data = await res.json();
+            if (data.success && data.data?.length) this.hasUnread = true;
+        } catch (e) { }
+    }
 };

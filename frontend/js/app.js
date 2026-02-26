@@ -16,6 +16,11 @@ import FundDetailModal from '../components/FundDetailModal.js';
 import PKModal from '../components/PKModal.js';
 import FilterDrawer from '../components/FilterDrawer.js';
 import AIChatPanel from '../components/AIChatPanel.js';
+import OnboardingGuide from '../components/OnboardingGuide.js';
+import DashboardView from '../components/DashboardView.js';
+import InlineExplain from '../components/InlineExplain.js';
+import MonthlyReportView from '../components/MonthlyReportView.js';
+import BehaviorProfile from '../components/BehaviorProfile.js';
 import {
     getScoreClass,
     getSentimentText,
@@ -50,14 +55,29 @@ createApp({
         FundDetailModal,
         PKModal,
         FilterDrawer,
-        AIChatPanel
+        AIChatPanel,
+        OnboardingGuide,
+        DashboardView,
+        InlineExplain,
+        MonthlyReportView,
+        BehaviorProfile
     },
     setup() {
         // 状态
-        const mode = ref('recommend');
+        const mode = ref(localStorage.getItem('fa_onboarding_complete') === '1' ? 'dashboard' : 'recommend');
         const loading = ref(false);
         const errorMsg = ref('');
         const isDark = ref(localStorage.getItem('theme') !== 'light');
+
+        // New Feature State
+        const showOnboarding = ref(localStorage.getItem('fa_onboarding_complete') !== '1');
+        const experienceLevel = ref(localStorage.getItem('fa_experience_level') || 'advanced');
+        const dashboardData = ref(null);
+        const dashboardLoading = ref(false);
+        const monthlyReportData = ref(null);
+        const monthlyReportLoading = ref(false);
+        const behaviorProfileData = ref(null);
+        const behaviorProfileLoading = ref(false);
 
         // 推荐页
         const recommendations = ref(null);
@@ -468,6 +488,7 @@ createApp({
         function switchMode(newMode) {
             mode.value = newMode;
             if (newMode === 'recommend') fetchRecommendations();
+            if (newMode === 'dashboard') fetchDashboard();
             if (newMode === 'channel') {
                 fetchMarketHotspots();
                 fetchHotSectors();
@@ -477,12 +498,51 @@ createApp({
             if (newMode === 'portfolio') fetchPortfolio();
             if (newMode === 'dca') fetchDcaPlans();
             if (newMode === 'history') fetchHistory();
+            if (newMode === 'report') fetchMonthlyReport();
+            if (newMode === 'behavior') fetchBehaviorProfile();
             if (newMode === 'watchlist') {
                 fetchWatchlist();
                 startWatchlistTimer();
             } else {
                 stopWatchlistTimer();
             }
+        }
+
+        async function fetchDashboard() {
+            dashboardLoading.value = true;
+            try {
+                const res = await fetch(`${API_BASE}/dashboard`);
+                const data = await res.json();
+                if (data.success) dashboardData.value = data.data;
+            } catch (e) { console.error('Dashboard fetch failed', e); }
+            finally { dashboardLoading.value = false; }
+        }
+
+        async function fetchMonthlyReport() {
+            monthlyReportLoading.value = true;
+            try {
+                const res = await fetch(`${API_BASE}/report/monthly`);
+                const data = await res.json();
+                if (data.success) monthlyReportData.value = data.data;
+            } catch (e) { console.error('Monthly report fetch failed', e); }
+            finally { monthlyReportLoading.value = false; }
+        }
+
+        async function fetchBehaviorProfile() {
+            behaviorProfileLoading.value = true;
+            try {
+                const res = await fetch(`${API_BASE}/user/behavior-profile`);
+                const data = await res.json();
+                if (data.success) behaviorProfileData.value = data.data;
+            } catch (e) { console.error('Behavior profile fetch failed', e); }
+            finally { behaviorProfileLoading.value = false; }
+        }
+
+        function handleOnboardingComplete(result) {
+            showOnboarding.value = false;
+            experienceLevel.value = result.experience;
+            mode.value = 'dashboard';
+            fetchDashboard();
         }
 
         async function openSectorDetail(sectorName) {
@@ -1201,7 +1261,8 @@ createApp({
         // 生命周期
         onMounted(() => {
             applyTheme();
-            fetchRecommendations();
+            if (mode.value === 'dashboard') fetchDashboard();
+            else fetchRecommendations();
             fetchMarketNews();
             fetchNotifications();
             // 每 10 分钟刷新一次通知
@@ -1389,13 +1450,18 @@ createApp({
                     const data = await res.json();
                     if (data.success) {
                         notifications.value = notifications.value.filter(n => n.id !== id);
-                        // Refresh to ensure badge and list are in sync
                         const res2 = await fetch(`${API_BASE}/notifications`);
                         const data2 = await res2.json();
                         if (data2.success) notifications.value = data2.data;
                     }
                 } catch (e) { showError('操作失败'); }
-            }
+            },
+
+            // New features
+            showOnboarding, experienceLevel, handleOnboardingComplete,
+            dashboardData, dashboardLoading, fetchDashboard,
+            monthlyReportData, monthlyReportLoading, fetchMonthlyReport,
+            behaviorProfileData, behaviorProfileLoading, fetchBehaviorProfile
         };
     }
 }).mount('#app');

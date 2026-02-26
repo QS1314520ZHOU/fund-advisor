@@ -18,6 +18,12 @@
         href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="css/styles.css">
+    <style>
+        .nav-locked { opacity: 0.35; cursor: not-allowed !important; font-size: 0.8rem; }
+        .nav-locked:hover { background: transparent !important; }
+        .ai-dot.pulse { animation: pulse-dot 1.5s infinite; }
+        @keyframes pulse-dot { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.6); opacity: 0.6; } }
+    </style>
 </head>
 
 <body>
@@ -26,9 +32,13 @@
         <div v-if="errorMsg" class="error-toast" @click="errorMsg=''">{{ errorMsg }}</div>
 
         <div class="app-container">
+            <!-- Onboarding -->
+            <onboarding-guide v-if="showOnboarding" @onboarding-complete="handleOnboardingComplete"></onboarding-guide>
+
             <!-- Sidebar Component -->
             <sidebar :mode="mode" :is-dark="isDark" :notifications="notifications"
-                :show-notifications="showNotifications" @switch-mode="switchMode" @toggle-theme="toggleTheme"
+                :show-notifications="showNotifications" :experience-level="experienceLevel"
+                @switch-mode="switchMode" @toggle-theme="toggleTheme"
                 @toggle-notifications="showNotifications = !showNotifications" @mark-read="markNotifRead"
                 @show-update-dialog="showUpdateDialog = true"></sidebar>
 
@@ -41,6 +51,10 @@
                     <div style="font-size: 0.95rem; font-weight: 500; color: var(--text-muted);">{{ dynamicGreeting }}
                     </div>
                 </div>
+
+                <!-- Dashboard -->
+                <dashboard-view v-if="mode === 'dashboard'" :dashboard-data="dashboardData" :loading="dashboardLoading"
+                    @switch-mode="switchMode" @analyze-fund="analyzeFundByCode" @refresh="fetchDashboard"></dashboard-view>
 
                 <recommend-view v-if="mode === 'recommend'" :loading="loading" :recommendations="recommendations"
                     :actions="dailyActions" :loading-actions="loadingDailyActions" v-model:rec-tab="recTab"
@@ -94,6 +108,14 @@
                 <tools-view v-if="mode === 'tools'" :fee-calculator="feeCalculator"
                     :portfolio-builder="portfolioBuilder" @calculate-fee="calculateFee"
                     @build-portfolio="buildPortfolio" @analyze-fund="analyzeFundByCode"></tools-view>
+
+                <!-- Monthly Report -->
+                <monthly-report-view v-if="mode === 'report'" :report-data="monthlyReportData"
+                    :loading="monthlyReportLoading" @handle-export-image="handleExportImage"></monthly-report-view>
+
+                <!-- Behavior Profile -->
+                <behavior-profile v-if="mode === 'behavior'" :profile-data="behaviorProfileData"
+                    :loading="behaviorProfileLoading"></behavior-profile>
             </main>
         </div>
 

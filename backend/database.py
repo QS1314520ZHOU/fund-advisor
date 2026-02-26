@@ -85,10 +85,8 @@ class Database:
             # 3. 定义迁移任务
             # 版本号从 1 开始
             migrations = [
-                # v1: 初始版本 (已经在 _init_tables 中创建)
-                # v2: 为 fund_metrics 添加 return_1d 列 (示例，实际已在初始表中包含)
                 (1, "初始版本", None),
-                # (2, "添加 return_1d 到 fund_metrics", "ALTER TABLE fund_metrics ADD COLUMN return_1d REAL"),
+                (2, "用户画像扩展: 新手引导与行为标签", None),  # 新表在 _init_tables 中创建
             ]
             
             for version, description, sql in migrations:
@@ -334,13 +332,40 @@ class Database:
             )
         """)
         
-        # 用户风险偏好表 (新增 Phase 7)
+        # 用户风险偏好表 (新增 Phase 7, Phase 8 扩展)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_profile (
                 user_id TEXT PRIMARY KEY DEFAULT 'default',
-                risk_level TEXT DEFAULT 'moderate', -- conservative, moderate, aggressive
+                risk_level TEXT DEFAULT 'moderate',
                 budget REAL DEFAULT 10000,
+                onboarding_complete INTEGER DEFAULT 0,
+                experience_level TEXT DEFAULT 'beginner',
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # AI 主动消息表 (Feature 4: 行为教练)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ai_chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL DEFAULT 'proactive',
+                content TEXT NOT NULL,
+                context_json TEXT,
+                fund_code TEXT,
+                is_read INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # 行为标签表 (Feature 10: 投资者画像)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS behavior_tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT DEFAULT 'default',
+                event_type TEXT NOT NULL,
+                tag TEXT NOT NULL,
+                fund_code TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
         
@@ -1115,13 +1140,18 @@ class Database:
             if row: return dict(row)
             return {'user_id': user_id, 'risk_level': 'moderate', 'budget': 10000}
             
-    def save_user_profile(self, risk_level: str, budget: float, user_id: str = 'default'):
+    def save_user_profile(self, risk_level: str, budget: float, user_id: str = 'default',
+                          onboarding_complete: int = None, experience_level: str = None):
         """保存用户偏好"""
         with self.get_cursor() as cursor:
+            # 先尝试获取现有记录
+            existing = self.get_user_profile(user_id)
+            ob = onboarding_complete if onboarding_complete is not None else existing.get('onboarding_complete', 0)
+            el = experience_level or existing.get('experience_level', 'beginner')
             cursor.execute("""
-                INSERT OR REPLACE INTO user_profile (user_id, risk_level, budget, updated_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            """, (user_id, risk_level, budget))
+                INSERT OR REPLACE INTO user_profile (user_id, risk_level, budget, onboarding_complete, experience_level, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (user_id, risk_level, budget, ob, el))
             
     # 3. 通知与风险提醒 (Notifications)
     def add_notification(self, type: str, title: str, content: str, fund_code: str = None):
@@ -1206,6 +1236,60 @@ class Database:
                 cursor.execute("SELECT * FROM dca_records WHERE plan_id = ? ORDER BY execute_date DESC LIMIT ?", (plan_id, limit))
             else:
                 cursor.execute("SELECT * FROM dca_records ORDER BY execute_date DESC LIMIT ?", (limit,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    # ==================== AI 主动消息 (Feature 4) ====================
+    
+    def add_ai_chat_message(self, content: str, msg_type: str = 'proactive', 
+                            fund_code: str = None, context: Dict = None):
+        """添加 AI 主动消息"""
+        ctx = json.dumps(context or {}, ensure_ascii=False)
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO ai_chat_messages (type, content, context_json, fund_code)
+                VALUES (?, ?, ?, ?)
+            """, (msg_type, content, ctx, fund_code))
+    
+    def get_unread_ai_messages(self) -> List[Dict]:
+        """获取未读 AI 主动消息"""
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT * FROM ai_chat_messages WHERE is_read = 0 ORDER BY created_at DESC LIMIT 20")
+            results = []
+            for row in cursor.fetchall():
+                item = dict(row)
+                if item.get('context_json'):
+                    try:
+                        item['context'] = json.loads(item['context_json'])
+                    except:
+                        item['context'] = {}
+                results.append(item)
+            return results
+    
+    def mark_ai_messages_read(self):
+        """标记所有 AI 消息为已读"""
+        with self.get_cursor() as cursor:
+            cursor.execute("UPDATE ai_chat_messages SET is_read = 1 WHERE is_read = 0")
+    
+    # ==================== 行为标签 (Feature 10) ====================
+    
+    def add_behavior_tag(self, event_type: str, tag: str, fund_code: str = None, user_id: str = 'default'):
+        """记录用户行为标签"""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO behavior_tags (user_id, event_type, tag, fund_code)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, event_type, tag, fund_code))
+    
+    def get_behavior_tags(self, user_id: str = 'default', days: int = 90) -> List[Dict]:
+        """获取用户行为标签"""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT tag, COUNT(*) as count, event_type
+                FROM behavior_tags 
+                WHERE user_id = ? AND created_at >= date('now', ?)
+                GROUP BY tag
+                ORDER BY count DESC
+            """, (user_id, f'-{days} days'))
             return [dict(row) for row in cursor.fetchall()]
 
 

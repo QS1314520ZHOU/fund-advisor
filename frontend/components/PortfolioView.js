@@ -10,6 +10,12 @@ export default {
         'handle-portfolio-diagnose', 'handle-export-image', 'fetch-portfolio',
         'analyze-fund', 'sell-position', 'run-backtest', 'update:showDiagnosis'
     ],
+    data() {
+        return {
+            alternatives: {},
+            altLoading: {}
+        };
+    },
     template: `
         <div class="glass-card" id="portfolio-view">
             <div class="section-header">
@@ -84,12 +90,40 @@ export default {
                         </div>
                     </div>
 
-                    <div style="display: flex; justify-content: flex-end; margin-top: 1rem;">
+                    <div style="display: flex; justify-content: flex-end; margin-top: 1rem; gap: 0.5rem;">
+                        <button class="pro-btn"
+                            style="padding: 0.4rem 0.8rem; font-size: 0.75rem; background: rgba(99,102,241,0.1); color: #6366f1;"
+                            @click="fetchAlternatives(pos.fund_code)"
+                            :disabled="altLoading[pos.fund_code]">
+                            {{ altLoading[pos.fund_code] ? '查找中...' : '🔄 有更好的替代吗？' }}
+                        </button>
                         <button class="pro-btn"
                             style="padding: 0.4rem 0.8rem; font-size: 0.75rem; background: rgba(244, 63, 94, 0.1); color: #f43f5e;"
                             @click="$emit('sell-position', pos.id)">
                             卖出
                         </button>
+                    </div>
+                    <!-- Alternatives Card -->
+                    <div v-if="alternatives[pos.fund_code]" style="margin-top: 0.75rem; padding: 0.75rem; background: rgba(99,102,241,0.05); border-radius: 12px; border: 1px solid rgba(99,102,241,0.15);">
+                        <div v-if="!alternatives[pos.fund_code].has_better" style="text-align: center; padding: 0.5rem; color: var(--text-muted); font-size: 0.85rem;">
+                            👍 当前持仓在同类中已属优秀，暂无更好替代
+                        </div>
+                        <template v-else>
+                            <div style="font-size: 0.75rem; font-weight: 700; color: var(--primary); margin-bottom: 0.5rem;">💡 发现更优替代</div>
+                            <div style="display: flex; gap: 0.5rem;">
+                                <div v-for="alt in alternatives[pos.fund_code].alternatives" :key="alt.code"
+                                    style="flex: 1; padding: 0.6rem; background: rgba(255,255,255,0.03); border-radius: 8px; cursor: pointer;"
+                                    @click="$emit('analyze-fund', alt.code)">
+                                    <div style="font-weight: 700; font-size: 0.8rem;">{{ alt.name }}</div>
+                                    <div style="font-size: 0.7rem; color: var(--text-muted);">{{ alt.code }}</div>
+                                    <div style="margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.7rem;">
+                                        <div>评分: <span style="color: #22c55e; font-weight: 700;">{{ alt.score }}</span> <span style="color: #22c55e;">(+{{ alt.score_diff }})</span></div>
+                                        <div>回撤: {{ alt.max_drawdown?.toFixed(1) }}%</div>
+                                        <div>夏普: {{ alt.sharpe?.toFixed(2) }}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
                     </div>
                 </div>
             </div>
@@ -220,6 +254,17 @@ export default {
             const dailyReturn = annualReturn / 250;
             const days = Math.log(cost / current) / Math.log(1 + dailyReturn);
             return Math.ceil(days);
+        },
+        async fetchAlternatives(code) {
+            this.altLoading[code] = true;
+            try {
+                const res = await fetch(`/api/v1/fund/${code}/alternatives`);
+                const data = await res.json();
+                if (data.success) {
+                    this.alternatives[code] = data.data;
+                }
+            } catch (e) { console.error(e); }
+            this.altLoading[code] = false;
         }
     }
 };

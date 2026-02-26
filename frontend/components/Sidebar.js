@@ -1,8 +1,35 @@
 
 export default {
     name: 'Sidebar',
-    props: ['mode', 'isDark', 'notifications', 'showNotifications'],
+    props: ['mode', 'isDark', 'notifications', 'showNotifications', 'experienceLevel'],
     emits: ['switch-mode', 'show-update-dialog', 'toggle-theme', 'toggle-notifications', 'mark-read'],
+    computed: {
+        navItems() {
+            const level = this.experienceLevel || 'advanced';
+            const all = [
+                { mode: 'dashboard', icon: '📊', label: '我的仪表盘', min: 'beginner' },
+                { mode: 'recommend', icon: '🎯', label: '智能推荐', min: 'beginner' },
+                { mode: 'dca', icon: '⏳', label: '智能定投', min: 'beginner' },
+                { mode: 'tools', icon: '🛠️', label: '专业工具', min: 'beginner' },
+                { mode: 'portfolio', icon: '💼', label: '资产持仓', min: 'intermediate' },
+                { mode: 'watchlist', icon: '⭐', label: '我的自选', min: 'intermediate' },
+                { mode: 'channel', icon: '🏆', label: '基金频道', min: 'intermediate' },
+                { mode: 'search', icon: '🔍', label: '深度搜索', min: 'intermediate' },
+                { mode: 'gainers', icon: '📈', label: '涨幅榜单', min: 'advanced' },
+                { mode: 'history', icon: '🕒', label: '推荐历史', min: 'advanced' },
+                { mode: 'macro', icon: '🌐', label: '宏观视野', min: 'advanced' },
+                { mode: 'report', icon: '📋', label: '月度体检', min: 'intermediate' },
+                { mode: 'behavior', icon: '🧠', label: '投资者画像', min: 'advanced' }
+            ];
+            const levelOrder = { beginner: 0, intermediate: 1, advanced: 2 };
+            const userLevel = levelOrder[level] ?? 2;
+            return all.map(item => ({
+                ...item,
+                visible: userLevel >= (levelOrder[item.min] ?? 0),
+                locked: userLevel < (levelOrder[item.min] ?? 0)
+            }));
+        }
+    },
     template: `
         <aside class="sidebar">
             <div class="brand">
@@ -11,37 +38,14 @@ export default {
             </div>
 
             <nav class="nav-menu">
-                <button class="nav-item" :class="{active: mode === 'recommend'}" @click="$emit('switch-mode', 'recommend')">
-                    🎯 智能推荐
-                </button>
-                <button class="nav-item" :class="{active: mode === 'channel'}" @click="$emit('switch-mode', 'channel')">
-                    🏆 基金频道
-                </button>
-                <button class="nav-item" :class="{active: mode === 'gainers'}" @click="$emit('switch-mode', 'gainers')">
-                    📈 涨幅榜单
-                </button>
-                <button class="nav-item" :class="{active: mode === 'search'}" @click="$emit('switch-mode', 'search')">
-                    🔍 深度搜索
-                </button>
-                <button class="nav-item" :class="{active: mode === 'history'}" @click="$emit('switch-mode', 'history')">
-                    🕒 推荐历史
-                </button>
-                <button class="nav-item" :class="{active: mode === 'portfolio'}" @click="$emit('switch-mode', 'portfolio')">
-                    💼 资产持仓
-                </button>
-                <button class="nav-item" :class="{active: mode === 'watchlist'}" @click="$emit('switch-mode', 'watchlist')">
-                    ⭐ 我的自选
-                </button>
-                <button class="nav-item" :class="{active: mode === 'macro'}"
-                    @click="$emit('switch-mode', 'macro')">
-                    🌐 宏观视野
-                </button>
-                <button class="nav-item" :class="{active: mode === 'dca'}" @click="$emit('switch-mode', 'dca')">
-                    ⏳ 智能定投
-                </button>
-                <button class="nav-item" :class="{active: mode === 'tools'}" @click="$emit('switch-mode', 'tools')">
-                    🛠️ 专业工具
-                </button>
+                <template v-for="item in navItems" :key="item.mode">
+                    <button v-if="item.visible" class="nav-item" :class="{active: mode === item.mode}" @click="$emit('switch-mode', item.mode)">
+                        {{ item.icon }} {{ item.label }}
+                    </button>
+                    <button v-else class="nav-item nav-locked" :title="'随着使用深度逐步解锁'" disabled>
+                        🔒 {{ item.label }}
+                    </button>
+                </template>
             </nav>
 
             <div style="margin-top: auto; padding-top: 2rem; display: flex; flex-direction: column; gap: 0.5rem; position: relative;">
