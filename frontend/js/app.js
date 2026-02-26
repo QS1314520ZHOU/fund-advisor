@@ -1366,6 +1366,9 @@ createApp({
                     const res = await fetch(`${API_BASE}/recommendation-history?days=30`);
                     const data = await res.json();
                     if (data.success) {
+                        // Ensure data is an object (grouped by date). 
+                        // If backend returns a list, this is where we would group it.
+                        // But roi_review_service already returns a dict, so we just assign.
                         recommendationHistory.value = data.data;
                     }
                 } catch (e) { showError('获取历史失败'); }
@@ -1386,6 +1389,10 @@ createApp({
                     const data = await res.json();
                     if (data.success) {
                         notifications.value = notifications.value.filter(n => n.id !== id);
+                        // Refresh to ensure badge and list are in sync
+                        const res2 = await fetch(`${API_BASE}/notifications`);
+                        const data2 = await res2.json();
+                        if (data2.success) notifications.value = data2.data;
                     }
                 } catch (e) { showError('操作失败'); }
             }

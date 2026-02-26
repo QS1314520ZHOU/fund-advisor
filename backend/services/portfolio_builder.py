@@ -73,7 +73,7 @@ class PortfolioBuilderService:
                     themes = themes_str
                     
                 # 如果分类包含宽基指数，通常没有具体主题（均衡），或者类型包含指数
-                if "指数" in category and ("指数" in fund.get('fund_type', '') or "ETF" in fund.get('name', '')):
+                if "指数" in category and ("指数" in fund.get('fund_type', '') or "ETF" in fund.get('name', '') or "指数" in fund.get('name', '')):
                     selected_fund = fund
                     break
                 
