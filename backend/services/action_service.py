@@ -1,5 +1,7 @@
 # backend/services/action_service.py
 import logging
+import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 
 try:
@@ -50,11 +52,26 @@ class ActionService:
         if prev_snapshot:
             prev_top_50 = {f['code'] for f in self.db.get_ranking(snapshot_id=prev_snapshot['id'], limit=50)}
 
-        # 获取当前快照前50名
+        # 获取当前市场 TOP 50
         top_funds = self.db.get_ranking(snapshot_id=snapshot['id'], limit=50)
         
+        # 额外拉取用户持仓基金，确保覆盖
+        holdings = self.db.get_holding_portfolio()
+        holding_codes = {h['fund_code'] for h in holdings}
+        
+        # 合并扫描列表 (TOP 50 + 持仓)
+        scan_list = top_funds[:]
+        top_codes = {f['code'] for f in top_funds}
+        
+        for h_code in holding_codes:
+            if h_code not in top_codes:
+                # 获取该持仓基金的最新指标
+                m = self.db.get_fund_metrics(snapshot['id'], h_code)
+                if m:
+                    scan_list.append(m)
+        
         actions = []
-        for fund in top_funds:
+        for fund in scan_list:
             # 基础过滤：如果是买入建议，检查是否最近7天已推荐
             action_data = self._determine_action(fund, prev_top_50)
             if not action_data:
@@ -122,10 +139,15 @@ class ActionService:
                 action = 'buy'
                 reason = f'本周深度回调 {abs(ret_1w):.1f}%，虽有波动但基本面依然极佳，适合博弈。'
                 level = 'strong'
-            elif score > 88: # 长期大白马，无条件低位建议
-                action = 'buy'
-                reason = '评分极其卓越的长跑冠军，任何回调都是定投好时点。'
-                level = 'strong'
+            elif score > 88: # 长期大白马
+                # 增加了安全阀：如果本周涨幅过快 (>10%) 或当前处于高位 (回撤 < 1%)，则不给出强烈买入建议，避免高位站岗
+                if ret_1w > 10 or cdd < 1:
+                    action = 'hold'
+                    reason = '评分极高，但近期涨幅过大，建议等待小坑回调再入场。'
+                else:
+                    action = 'buy'
+                    reason = '评分极其卓越的长跑冠军，任何回调都是定投好时点。'
+                    level = 'strong'
                 
         # 卖出/减仓逻辑: 评分降低 (<45) 或者短期回撤太大且分数滑坡
         elif score < 45:

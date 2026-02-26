@@ -1092,17 +1092,32 @@ async def get_portfolio_holding():
         return error_response(error=str(e))
 
 @router.post("/portfolio/buy")
-async def buy_fund(req: PortfolioBuyRequest):
-    """买入基金"""
+async def buy_fund(
+    req: Optional[PortfolioBuyRequest] = None,
+    code: Optional[str] = Query(None),
+    shares: Optional[float] = Query(None),
+    cost_price: Optional[float] = Query(None),
+    name: Optional[str] = Query(None)
+):
+    """买入基金 - 支持 Body 或 Query Params (兼容前端)"""
     try:
         db = get_db()
+        # 优先使用 query params (如前端 app.js:865 所示)
+        f_code = code or (req.fund_code if req else None)
+        f_shares = shares or (req.shares if req else None)
+        f_price = cost_price or (req.cost_price if req else 0)
+        f_name = name or (req.fund_name if req else "")
+        
+        if not f_code or f_shares is None:
+            return error_response(error="缺少必要参数")
+            
         success = db.add_portfolio_position(
-            fund_code=req.fund_code,
-            fund_name=req.fund_name,
-            shares=req.shares,
-            cost_price=req.cost_price,
-            buy_date=req.buy_date,
-            notes=req.notes
+            fund_code=f_code,
+            fund_name=f_name,
+            shares=f_shares,
+            cost_price=f_price,
+            buy_date=datetime.now().strftime('%Y-%m-%d'),
+            notes=""
         )
         if success:
             return success_response(message="买入记录已保存")
@@ -1111,14 +1126,24 @@ async def buy_fund(req: PortfolioBuyRequest):
         return error_response(error=str(e))
 
 @router.post("/portfolio/sell")
-async def sell_fund(req: PortfolioSellRequest):
-    """卖出基金"""
+async def sell_fund(
+    req: Optional[PortfolioSellRequest] = None,
+    position_id: Optional[int] = Query(None),
+    sell_price: Optional[float] = Query(None)
+):
+    """卖出基金 - 支持 Body 或 Query Params"""
     try:
         db = get_db()
+        p_id = position_id or (req.position_id if req else None)
+        s_price = sell_price or (req.sell_price if req else 0)
+        
+        if p_id is None:
+            return error_response(error="缺少持仓ID")
+            
         success = db.sell_portfolio_position(
-            position_id=req.position_id,
-            sell_price=req.sell_price,
-            sell_date=req.sell_date
+            position_id=p_id,
+            sell_price=s_price,
+            sell_date=datetime.now().strftime('%Y-%m-%d')
         )
         if success:
             return success_response(message="卖出记录已保存")
@@ -1521,15 +1546,14 @@ async def get_top_gainers(
 
 # ==================== 持仓模拟接口 ====================
 
+@router.get("/portfolio/performance")
 @router.get("/portfolio")
 async def get_portfolio():
     """
-    获取持仓列表
+    获取持仓列表 (兼容 /portfolio 和 /portfolio/performance)
     """
     try:
         db = get_db()
-        service = get_snapshot_service()
-        
         positions = db.get_portfolio(status='holding')
         summary = db.get_portfolio_summary()
         
@@ -1566,15 +1590,14 @@ async def get_portfolio():
         
         return {
             'success': True,
-            'data': {
-                'positions': enriched_positions,
-                'summary': {
-                    'total_positions': summary['total_positions'],
-                    'total_cost': round(summary['total_cost'], 2),
-                    'total_value': round(total_value, 2),
-                    'total_profit': round(total_profit, 2),
-                    'total_profit_rate': round(total_profit / summary['total_cost'] * 100, 2) if summary['total_cost'] > 0 else 0
-                }
+            'items': enriched_positions, # 兼容前端 app.js:847 的 items 字段
+            'data': enriched_positions,
+            'summary': {
+                'total_positions': summary['total_positions'],
+                'total_cost': round(summary['total_cost'], 2),
+                'total_value': round(total_value, 2),
+                'total_profit': round(total_profit, 2),
+                'total_profit_rate': round(total_profit / summary['total_cost'] * 100, 2) if summary['total_cost'] > 0 else 0
             }
         }
     except Exception as e:
@@ -1937,50 +1960,16 @@ async def get_portfolio_performance():
 @router.get("/recommendation-history")
 async def get_recommendation_history(
     days: int = Query(30, ge=7, le=90, description="查询天数"),
-    category: str = Query(None, description="推荐类别: top10/high_alpha/long_term/short_term/low_beta")
 ):
     """
-    获取历史推荐回溯
-    
-    返回历史推荐的基金及其当前收益情况
+    获取历史推荐回溯 (Phase 7 统一结构)
     """
     try:
-        db = get_db()
-        
-        history = db.get_recommendation_history(days=days, category=category)
-        
-        # 按推荐日期分组
-        grouped = {}
-        for item in history:
-            date = item.get('recommend_date', '')
-            if date not in grouped:
-                grouped[date] = []
-            grouped[date].append({
-                'code': item['fund_code'],
-                'name': item.get('fund_name', ''),
-                'category': item.get('category', ''),
-                'score': item.get('score', 0),
-                'nav_at_recommend': item.get('nav_at_recommend'),
-                'current_nav': item.get('current_nav'),
-                'return_since_recommend': item.get('return_since_recommend')
-            })
-        
-        # 计算统计数据
-        total_recommendations = len(history)
-        positive_returns = sum(1 for h in history if (h.get('return_since_recommend') or 0) > 0)
-        avg_return = sum(h.get('return_since_recommend') or 0 for h in history) / total_recommendations if total_recommendations > 0 else 0
-        
-        return {
-            'success': True,
-            'data': {
-                'days': days,
-                'category': category,
-                'total_recommendations': total_recommendations,
-                'positive_rate': round(positive_returns / total_recommendations * 100, 1) if total_recommendations > 0 else 0,
-                'avg_return': round(avg_return, 2),
-                'history': grouped
-            }
-        }
+        from ..services.roi_review_service import get_roi_service
+        service = get_roi_service()
+        # 将天数近似转换为快照数量 (假设每日一快照)
+        result = await service.get_historical_roi(limit=days)
+        return result
     except Exception as e:
         logger.error(f"获取推荐历史失败: {e}")
         return {

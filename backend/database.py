@@ -633,7 +633,7 @@ class Database:
                     WHERE snapshot_id = ? AND themes LIKE ?
                     ORDER BY score DESC
                     LIMIT ?
-                """, (snapshot_id, f'%{theme}%', limit))
+                """, (snapshot_id, f'%"{theme}"%', limit))
             else:
                 cursor.execute("""
                     SELECT * FROM fund_metrics 
@@ -694,26 +694,45 @@ class Database:
             return results
     
     def get_qualified_funds(self, snapshot_id: int) -> List[Dict]:
-        """获取快照中所有入选基金"""
+        """获取快照中所有入选基金 (含基本信息)"""
         try:
             with self.get_cursor() as cursor:
+                # 显式选择字段避免 m.themes 和 f.themes 冲突
                 cursor.execute("""
-                    SELECT f.code, f.name, f.fund_type, f.themes, m.*
+                    SELECT 
+                        m.*, 
+                        f.fund_type, 
+                        f.themes as themes_json,
+                        f.name as fund_name
                     FROM fund_metrics m
-                    JOIN funds f ON m.fund_code = f.code
+                    JOIN funds f ON m.code = f.code
                     WHERE m.snapshot_id = ?
                 """, (snapshot_id,))
                 columns = [column[0] for column in cursor.description]
                 results = []
                 for row in cursor.fetchall():
                     item = dict(zip(columns, row))
+                    # 解析指标中的 themes (JSON)
                     if item.get('themes'):
-                        item['themes'] = json.loads(item['themes'])
+                        try:
+                            item['themes'] = json.loads(item['themes'])
+                        except:
+                            item['themes'] = []
+                    # 同时也提供 themes_json 兼容 snapshot.py:790
+                    if item.get('themes_json'):
+                        try:
+                            item['themes_json'] = item['themes_json'] # 保持原样或解析
+                        except:
+                            pass
                     results.append(item)
                 return results
         except Exception as e:
             logger.error(f"Failed to get qualified funds: {e}")
             return []
+
+    def get_snapshot_metrics(self, snapshot_id: int) -> List[Dict]:
+        """别名：供 snapshot.py 调用"""
+        return self.get_qualified_funds(snapshot_id)
 
     def get_funds_by_codes(self, snapshot_id: int, codes: List[str]) -> List[Dict]:
         """按代码批量获取基金指标"""
@@ -725,7 +744,7 @@ class Database:
                 cursor.execute(f"""
                     SELECT f.code, f.name, f.fund_type, f.themes, m.*
                     FROM fund_metrics m
-                    JOIN funds f ON m.fund_code = f.code
+                    JOIN funds f ON m.code = f.code
                     WHERE m.snapshot_id = ? AND f.code IN ({placeholders})
                 """, (snapshot_id, *codes))
                 columns = [column[0] for column in cursor.description]

@@ -1,4 +1,5 @@
 # backend/services/portfolio_builder.py
+import json
 import logging
 from typing import Dict, Any, List
 
@@ -64,7 +65,10 @@ class PortfolioBuilderService:
             for fund in funds:
                 themes_str = fund.get('themes', [])
                 if isinstance(themes_str, str):
-                    themes = eval(themes_str) if '[' in themes_str else []
+                    try:
+                        themes = json.loads(themes_str) if '[' in themes_str else []
+                    except:
+                        themes = []
                 else:
                     themes = themes_str
                     

@@ -372,68 +372,14 @@ class NewsService:
             return {"up": 0, "down": 0, "flat": 0, "total": 0}
 
     async def analyze_market_sentiment(self) -> Dict[str, Any]:
-        """Advanced Sentiment Analysis with Breadth and AI-ready logic"""
+        """使用统一计算器进行市场情绪分析"""
         news = await self.get_market_news(limit=50)
         breadth = await self.get_market_breadth()
         
-        if not news and breadth['total'] == 0:
-            return {"score": 50, "trend": "中性", "summary": "暂未获取到足够资讯进行分析。"}
-
-        # 1. Keyword Sentiment (News based)
-        pos_words = ["上涨", "利好", "反弹", "surge", "gain", "bull", "growth", "profit", "jump", "高开", "复苏", "大涨", "回暖"]
-        neg_words = ["下跌", "利空", "回调", "drop", "loss", "bear", "decline", "risk", "warn", "低开", "衰退", "大跌", "跳水"]
+        from .calculator import get_calculator
+        calc = get_calculator()
         
-        news_score = 50
-        pos_count = 0
-        neg_count = 0
-        
-        for n in news:
-            text = (n['title'] + " " + n.get('content', '')).lower()
-            p = sum(1 for w in pos_words if w in text)
-            ne = sum(1 for w in neg_words if w in text)
-            pos_count += p
-            neg_count += ne
-            
-        news_score += (pos_count - neg_count) * 1.5
-        
-        # 2. Breadth Sentiment (Market based)
-        breadth_score = 50
-        if breadth['total'] > 0:
-            breadth_score = breadth['up_ratio'] # 0-100 directly
-            
-        # 3. Combine Scores (60% Market, 40% News)
-        combined_score = (breadth_score * 0.6) + (news_score * 0.4)
-        combined_score = max(5, min(95, combined_score))
-        
-        # Mapping to Labels
-        trend = "震荡"
-        fear_greed = "Neutral"
-        if combined_score > 60: 
-            trend = "偏多"
-            fear_greed = "Greed"
-        if combined_score > 80: 
-            trend = "乐观"
-            fear_greed = "Extreme Greed"
-        if combined_score < 40: 
-            trend = "偏空"
-            fear_greed = "Fear"
-        if combined_score < 20: 
-            trend = "悲观"
-            fear_greed = "Extreme Fear"
-        
-        summary = f"基于 {len(news)} 条全网快讯及全市场 {breadth['total']} 只 A 股表现分析：当前市场处于 {fear_greed} 状态。"
-        if breadth['total'] > 0:
-            summary += f" 涨跌比为 {breadth['up']}:{breadth['down']}，活跃度{trend}。"
-
-        return {
-            "score": int(combined_score),
-            "trend": trend,
-            "fear_greed": fear_greed,
-            "breadth": breadth,
-            "summary": summary,
-            "news_stats": {"pos": pos_count, "neg": neg_count},
-            "hot_sectors": ["全球市场", "混合资产"]
-        }
+        return calc.analyze_market_sentiment(news, breadth)
 
     async def get_fund_news(self, code: str) -> List[Dict]:
         """Get Fund Specific News"""

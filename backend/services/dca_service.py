@@ -68,22 +68,38 @@ class DcaService:
             amount = plan['base_amount']
             
             # 1. 获取实时估值作为执行价格
-            nav = 1.0 # 默认值
-            shares = 0
+            nav = 0.0
             try:
+                # 优先尝试批量实时估值
                 vals = self.fetcher.get_realtime_valuation_batch([fund_code])
                 if fund_code in vals:
                     val = vals[fund_code]
-                    nav = val.get('estimation_nav', val.get('nav', 1.0))
-                else:
-                    # 如果没有实时估值，尝试获取历史净值
+                    nav = float(val.get('estimation_nav', val.get('nav', 0.0)))
+                
+                # 如果批量没拿到，尝试单个实时补丁
+                if nav == 0.0:
+                    val = self.fetcher.get_realtime_valuation(fund_code)
+                    if val:
+                        nav = float(val.get('estimation_nav', val.get('nav', 0.0)))
+                
+                # 如果还是没有，从数据库历史记录中获取最新一个
+                if nav == 0.0:
+                    history = self.db.get_nav_history(fund_code, limit=1)
+                    if history:
+                        nav = float(history[0].get('nav', 0.0))
+                
+                # 最后兜底：尝试 fetcher 的标准历史接口
+                if nav == 0.0:
                     df = self.fetcher.get_fund_nav(fund_code)
                     if df is not None and not df.empty:
-                        nav = df['nav'].iloc[-1]
+                        nav = float(df['nav'].iloc[-1])
             except Exception as e:
                 logger.warning(f"Failed to fetch real NAV for DCA plan {plan_id}: {e}")
             
-            shares = amount / nav if nav > 0 else 0
+            # 如果全面溃败，保持 1.0 兜底以防除以零，但记录警告
+            if nav <= 0:
+                logger.error(f"CRITICAL: Could not resolve NAV for {fund_code}, defaulting to 1.0")
+                nav = 1.0
             
             # 2. 保存执行记录
             success = self.db.save_dca_record(

@@ -40,12 +40,12 @@ def daily_update_job():
         logger.error(f"每日更新失败: {message}")
 
 
-def dca_check_job():
+async def dca_check_job():
     """每日定投执行核查任务 (建议在收盘后运行)"""
     try:
         from .services.dca_service import get_dca_service
         service = get_dca_service()
-        count = service.check_and_execute_plans()
+        count = await service.check_and_execute_plans()
         if count > 0:
             logger.info(f"DCA check job completed: {count} plans executed.")
     except Exception as e:
@@ -99,14 +99,13 @@ def init_scheduler():
     logger.info("调度器已启动: 每60分钟检测一次自动同步条件，15:35 执行定投核查，15:40 执行风险核查")
 
 
-def nightly_sync_check():
-    """夜间同步检测逻辑"""
+async def nightly_sync_check():
+    """夜间同步检测逻辑 (异步包装以防阻塞)"""
     now = datetime.now()
     hour = now.hour
     
     # 1. 时间窗口检查 (0:00 - 5:00)
     if not (0 <= hour < 5):
-        # logger.debug(f"当前时间 {now.strftime('%H:%M')} 不在更新窗口 (0-5点)，跳过")
         return
 
     # 2. 检查今天是否已经有成功的快照
@@ -125,21 +124,20 @@ def nightly_sync_check():
         if last_date != today_str:
             should_run = True
             logger.info(f"今日 ({today_str}) 尚未有成功快照 (上次: {last_date})，准备执行同步...")
-        else:
-            # 今天已经有快照了
-            pass
 
     if should_run:
-        # 3. 执行更新
+        # 3. 执行更新 (使用 to_thread 防止阻塞事件循环)
         logger.info("满足自动更新条件，开始执行全量同步...")
-        # 0-5点期间执行无过滤同步
-        result = service.create_full_snapshot(skip_filter=True)
-        success = result.get('success', False)
-        message = result.get('message', '')
-        if success:
-            logger.info(f"自动更新完成: {message}")
-        else:
-            logger.error(f"自动更新失败: {message}")
+        try:
+            result = await asyncio.to_thread(service.create_full_snapshot, skip_filter=True)
+            success = result.get('success', False)
+            message = result.get('message', '')
+            if success:
+                logger.info(f"自动更新完成: {message}")
+            else:
+                logger.error(f"自动更新失败: {message}")
+        except Exception as e:
+            logger.error(f"自动更新过程中出现异常: {e}")
 
 
 def shutdown_scheduler():

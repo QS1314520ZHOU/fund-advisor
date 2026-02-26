@@ -424,6 +424,61 @@ class MetricsCalculator:
         chart_df['date'] = chart_df['date'].dt.strftime('%m-%d')
         return chart_df.to_dict(orient='records')
 
+    def analyze_market_sentiment(self, news: List[Dict], breadth: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        市场情绪分析 - 统一入口
+        """
+        if not news and breadth.get('total', 0) == 0:
+            return {"score": 50, "trend": "中性", "summary": "暂未获取到足够资讯进行分析。"}
+
+        # 1. 关键词情绪分析
+        pos_words = ["上涨", "利好", "反弹", "surge", "gain", "bull", "growth", "profit", "jump", "高开", "复苏", "大涨", "回暖"]
+        neg_words = ["下跌", "利空", "回调", "drop", "loss", "bear", "decline", "risk", "warn", "低开", "衰退", "大跌", "跳水"]
+        
+        news_score = 50
+        pos_count = 0
+        neg_count = 0
+        
+        for n in news:
+            text = (n.get('title', '') + " " + n.get('content', '')).lower()
+            p = sum(1 for w in pos_words if w in text)
+            ne = sum(1 for w in neg_words if w in text)
+            pos_count += p
+            neg_count += ne
+            
+        news_score += (pos_count - neg_count) * 1.5
+        
+        # 2. 市场分时情绪 (Breadth)
+        breadth_score = 50
+        if breadth.get('total', 0) > 0:
+            breadth_score = breadth.get('up_ratio', 50)
+            
+        # 3. 综合评分 (60% 市场宽度, 40% 新闻情绪)
+        combined_score = (breadth_score * 0.6) + (news_score * 0.4)
+        combined_score = max(5, min(95, combined_score))
+        
+        # 4. 标签映射
+        trend = "震荡"
+        fear_greed = "Neutral"
+        if combined_score > 60: trend, fear_greed = "偏多", "Greed"
+        if combined_score > 80: trend, fear_greed = "乐观", "Extreme Greed"
+        if combined_score < 40: trend, fear_greed = "偏空", "Fear"
+        if combined_score < 20: trend, fear_greed = "悲观", "Extreme Fear"
+        
+        summary = f"基于 {len(news)} 条全网快讯及全市场 {breadth.get('total', 0)} 只 A 股表现分析：当前市场处于 {fear_greed} 状态。"
+        if breadth.get('total', 0) > 0:
+            summary += f" 涨跌比为 {breadth.get('up', 0)}:{breadth.get('down', 0)}，活跃度{trend}。"
+
+        return {
+            "score": int(combined_score),
+            "trend": trend,
+            "fear_greed": fear_greed,
+            "breadth": breadth,
+            "summary": summary,
+            "news_stats": {"pos": pos_count, "neg": neg_count},
+            "hot_sectors": ["全球市场", "混合资产"]
+        }
+
 
 # 全局实例
 _calculator = None

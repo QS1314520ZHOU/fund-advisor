@@ -19,88 +19,98 @@ class ROIReviewService:
         self.db = get_db()
         self.fetcher = get_data_fetcher()
         
-    async def get_historical_roi(self, limit: int = 10) -> Dict[str, Any]:
+    async def get_historical_roi(self, limit: int = 15) -> Dict[str, Any]:
         """
-        获取历史推荐的收益回顾
+        获取历史推荐的收益回顾 - 对接 Phase 7 HistoryView.js
         
-        Args:
-            limit: 回顾最近多少个快照
-            
         Returns:
-            快照回顾列表
+            { "date": { "category": [funds] } }
         """
         try:
             # 1. 获取最近成功的快照
             snapshots = self.db.get_successful_snapshots(limit=limit)
             if not snapshots:
-                return {"success": True, "history": []}
+                return {"success": True, "data": {}}
             
-            # 2. 获取当前全市场最新净值（用于计算收益）
-            # 获取所有涉及到的基金代码
+            # 2. 准备分类映射
+            categories = ['top10', 'high_alpha', 'long_term', 'short_term', 'low_beta']
+            
+            # 3. 结果容器
+            result_data = {}
             all_codes = set()
-            snapshot_data = []
             
+            # 预处理：收集所有涉及的基金并按快照组织
+            snapshot_funds_map = {}
             for snp in snapshots:
-                # 每个快照取前 10 名
-                top_funds = self.db.get_recommendations(snapshot_id=snp['id'], limit=10)
-                snp['top10'] = top_funds
-                for f in top_funds:
+                funds = self.db.get_recommendations(snapshot_id=snp['id'], limit=100)
+                snapshot_funds_map[snp['id']] = funds
+                for f in funds:
                     all_codes.add(f['code'])
-                snapshot_data.append(snp)
             
-            # 批量获取实时估值
+            # 批量获取估值补丁 (如果有实时数据更好)
             current_valuations = self.fetcher.get_realtime_valuation_batch(list(all_codes))
             
-            history = []
-            for snp in snapshot_data:
-                valid_items = []
-                total_roi = 0
-                count = 0
+            for snp in snapshots:
+                date_key = snp['snapshot_date']
+                day_data = {cat: [] for cat in categories}
                 
-                for fund in snp['top10']:
+                funds = snapshot_funds_map.get(snp['id'], [])
+                for fund in funds:
+                    labels = fund.get('labels', [])
+                    
+                    # 计算 ROI
+                    old_nav = fund.get('latest_nav', 0)
                     code = fund['code']
-                    old_nav = fund['latest_nav']
                     
-                    # 获取最新确认净值 (来自 nav_history)
-                    curr_nav = 0
-                    db = get_db()
-                    recent_navs = db.get_nav_history(code, limit=1)
-                    if recent_navs:
-                        curr_nav = recent_navs[0].get('nav', 0)
+                    # 获取当前净值 (优先使用数据库历史，再使用实时估值)
+                    curr_nav = 0.0
+                    try:
+                        # 1. 尝试从数据库获取最新记录
+                        recent_navs = self.db.get_nav_history(code, limit=1)
+                        if recent_navs:
+                            curr_nav = float(recent_navs[0].get('nav', 0.0))
+                        
+                        # 2. 如果数据库没有，从批量估值缓存中拿
+                        if curr_nav == 0.0:
+                            val = current_valuations.get(code, {})
+                            curr_nav = float(val.get('nav', val.get('estimation_nav', 0.0)))
+                            
+                        # 3. 兜底：如果还是 0，尝试单个实时拉取
+                        if curr_nav == 0.0:
+                            val = self.fetcher.get_realtime_valuation(code)
+                            if val:
+                                curr_nav = float(val.get('nav', val.get('estimation_nav', 0.0)))
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch current NAV for ROI review of {code}: {e}")
                     
-                    # 补丁：如果 confirmed nav 缺失，回退到今日估值
-                    if curr_nav == 0:
-                        val = current_valuations.get(code, {})
-                        curr_nav = val.get('nav', val.get('estimation_nav', 0))
-                    
+                    roi = 0
                     if curr_nav > 0 and old_nav > 0:
                         roi = (curr_nav / old_nav - 1) * 100
-                        total_roi += roi
-                        count += 1
-                        
-                        valid_items.append({
-                            "code": code,
-                            "name": fund.get('name', ''),
-                            "old_nav": round(old_nav, 4),
-                            "current_nav": round(curr_nav, 4),
-                            "roi": round(roi, 2),
-                            "score_then": fund.get('score', 0)
-                        })
+                    
+                    fund_item = {
+                        "fund_code": code,
+                        "fund_name": fund.get('name', ''),
+                        "return_since_recommend": round(roi, 2),
+                        "nav_at_recommend": round(old_nav, 4),
+                        "current_nav": round(curr_nav, 4),
+                        "score": fund.get('score', 0)
+                    }
+                    
+                    # 分类投递
+                    if 'TOP10' in labels: day_data['top10'].append(fund_item)
+                    if '高Alpha' in labels: day_data['high_alpha'].append(fund_item)
+                    if '长线' in labels: day_data['long_term'].append(fund_item)
+                    if '短线' in labels: day_data['short_term'].append(fund_item)
+                    if '防守' in labels: day_data['low_beta'].append(fund_item)
                 
-                if count > 0:
-                    history.append({
-                        "snapshot_id": snp['id'],
-                        "date": snp['snapshot_date'],
-                        "avg_roi": round(total_roi / count, 2),
-                        "count": count,
-                        "top_performers": sorted(valid_items, key=lambda x: -x['roi'])[:3],
-                        "details": valid_items
-                    })
+                # 过滤掉空的分类
+                filtered_day_data = {k: v for k, v in day_data.items() if v}
+                if filtered_day_data:
+                    result_data[date_key] = filtered_day_data
             
             return {
                 "success": True,
-                "history": history,
-                "overall_avg_roi": round(sum(h['avg_roi'] for h in history) / len(history), 2) if history else 0
+                "data": result_data
             }
             
         except Exception as e:

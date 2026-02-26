@@ -15,9 +15,9 @@ async def test_fee_calculate():
             print(f"Response: {json.dumps(data, indent=2, ensure_ascii=False)}")
             assert data["success"] is True
             assert "fee_loss" in data["data"]
-            print("✅ Fee calculation test passed")
+            print("[PASS] Fee calculation test passed")
         except Exception as e:
-            print(f"❌ Fee calculation test failed: {e}")
+            print(f"[FAIL] Fee calculation test failed: {e}")
 
 async def test_notifications():
     print("\nTesting /notifications...")
@@ -28,9 +28,9 @@ async def test_notifications():
             data = response.json()
             print(f"Response: {json.dumps(data, indent=2, ensure_ascii=False)}")
             assert data["success"] is True
-            print("✅ Notifications test passed")
+            print("[PASS] Notifications test passed")
         except Exception as e:
-            print(f"❌ Notifications test failed: {e}")
+            print(f"[FAIL] Notifications test failed: {e}")
 
 async def main():
     print("Starting API Verification...")
