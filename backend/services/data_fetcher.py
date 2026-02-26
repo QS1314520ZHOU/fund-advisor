@@ -876,6 +876,11 @@ class DataFetcher:
         # Fallback to local logic if needed or return empty
         return []
 
+    def get_realtime_valuation(self, code: str) -> Optional[Dict]:
+        """获取单只基金实时估值"""
+        res = self.get_realtime_valuation_batch([code])
+        return res.get(str(code).zfill(6))
+
     def get_realtime_valuation_batch(self, codes: List[str]) -> Dict[str, Dict]:
         """
         批量获取基金实时估值

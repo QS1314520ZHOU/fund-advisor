@@ -899,8 +899,9 @@ class Database:
                     pass
         return saved
     
-    def get_nav_history(self, fund_code: str, days: int = 60) -> List[Dict]:
+    def get_nav_history(self, fund_code: str, days: int = 60, limit: int = None) -> List[Dict]:
         """获取净值历史"""
+        actual_limit = limit if limit is not None else days
         with self.get_cursor() as cursor:
             cursor.execute("""
                 SELECT nav_date, nav, acc_nav
@@ -908,7 +909,7 @@ class Database:
                 WHERE fund_code = ?
                 ORDER BY nav_date DESC
                 LIMIT ?
-            """, (fund_code, days))
+            """, (fund_code, actual_limit))
             rows = cursor.fetchall()
             return [{'date': r['nav_date'], 'nav': r['nav'], 'acc_nav': r['acc_nav']} for r in rows]
     

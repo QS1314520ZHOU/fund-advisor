@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query, HTTPException, Request
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 import json
-import datetime
+from datetime import datetime
 import logging
 logger = logging.getLogger(__name__)
 

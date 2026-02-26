@@ -1,6 +1,8 @@
+import KnowledgeCard from './KnowledgeCard.js';
 
 export default {
     name: 'FundDetailModal',
+    components: { KnowledgeCard },
     props: [
         'fundDetail', 'activeFundTab', 'getScoreClass', 'showRadar', 'defaultRadar',
         'renderAIContent', 'chartPath', 'crashMarkers', 'fundRanks', 'showDca',
