@@ -1119,6 +1119,22 @@ async def buy_fund(
             notes=""
         )
         if success:
+            # P2: Write behavior tag for buy action
+            try:
+                tag = 'disciplined_buy'
+                if f_shares and f_price:
+                    total_cost = f_shares * f_price
+                    if total_cost > 50000:
+                        tag = 'large_position'
+                    elif total_cost < 1000:
+                        tag = 'small_test'
+                db.add_behavior_tag(
+                    event_type='manual_buy',
+                    tag=tag,
+                    fund_code=f_code
+                )
+            except Exception:
+                pass  # Non-critical, don't block the buy
             return success_response(message="买入记录已保存")
         return error_response(error="保存失败")
     except Exception as e:
@@ -1145,6 +1161,27 @@ async def sell_fund(
             sell_date=datetime.now().strftime('%Y-%m-%d')
         )
         if success:
+            # P2: Write behavior tag for sell action
+            try:
+                positions = db.get_portfolio(status='sold')
+                pos = next((p for p in positions if p['id'] == p_id), None)
+                if pos:
+                    profit_rate = ((s_price / pos['cost_price']) - 1) * 100 if pos.get('cost_price') and s_price else 0
+                    if profit_rate < -10:
+                        tag = 'panic_sell'
+                    elif profit_rate < 0:
+                        tag = 'stop_loss'
+                    elif profit_rate > 30:
+                        tag = 'take_profit'
+                    else:
+                        tag = 'normal_sell'
+                    db.add_behavior_tag(
+                        event_type='manual_sell',
+                        tag=tag,
+                        fund_code=pos.get('fund_code', '')
+                    )
+            except Exception:
+                pass  # Non-critical
             return success_response(message="卖出记录已保存")
         return error_response(error="保存失败")
     except Exception as e:
@@ -3112,27 +3149,7 @@ async def build_portfolio(amount: float = Query(..., gt=0), risk_level: str = 'm
         logger.error(f"生成建仓方案失败: {e}")
         return {"success": False, "error": str(e)}
 
-@router.get("/user/profile")
-async def get_user_profile():
-    """获取用户风险偏好与预算"""
-    try:
-        db = get_db()
-        return {"success": True, "data": db.get_user_profile()}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@router.post("/user/profile")
-async def save_user_profile(profile: Dict[str, Any]):
-    """更新用户风险偏好与预算"""
-    try:
-        db = get_db()
-        db.save_user_profile(
-            risk_level=profile.get('risk_level', 'moderate'),
-            budget=profile.get('budget', 10000)
-        )
-        return {"success": True, "message": "设置已保存"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+# (Duplicate /user/profile removed - Feature 1 endpoints at line ~3200 take precedence)
 
 @router.get("/dca/plans")
 async def get_dca_plans():
